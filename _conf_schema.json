@@ -1,0 +1,278 @@
+{
+  "duplicate_window_seconds": {
+    "type": "int",
+    "description": "【基础】重复链接拦截时间（秒）",
+    "hint": "推荐保持 15。相同会话在这段时间内重复发送同一视频时不再重复解析；填 0 关闭拦截。",
+    "default": 15
+  },
+  "duplicate_scope": {
+    "type": "string",
+    "description": "【基础】重复判断范围",
+    "hint": "新手保持 conversation：同一群/私聊共用拦截记录。需要每个人独立判断时才选 sender。",
+    "options": [
+      "conversation",
+      "sender"
+    ],
+    "default": "conversation"
+  },
+  "duplicate_notice": {
+    "type": "string",
+    "description": "【基础】重复链接提示",
+    "hint": "机器人拒绝重复解析时发送的文字；留空则静默拦截。",
+    "default": "检测到短时间内重复发送的 B 站链接，已拒绝重复解析。"
+  },
+  "enable_ai_summary": {
+    "type": "bool",
+    "description": "【AI 总结】启用 AI 视频总结",
+    "hint": "关闭不会调用模型。开启后优先使用 B 站字幕；需要在 AstrBot 中先配置可用模型商。",
+    "default": false
+  },
+  "summary_provider_id": {
+    "type": "string",
+    "description": "【AI 总结】使用哪个模型商",
+    "hint": "推荐留空，自动使用当前会话的模型。只有需要固定某个模型时才选择指定模型商。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "summary_max_chars": {
+    "type": "int",
+    "description": "【AI 总结】输出长度（字）",
+    "hint": "推荐 320。数值越大越详细，也会消耗更多模型额度；一般设置 120-600。",
+    "default": 320
+  },
+  "subtitle_max_chars": {
+    "type": "int",
+    "description": "【AI 总结】读取字幕长度上限",
+    "hint": "推荐 12000。太小可能遗漏内容，太大会增加模型输入和等待时间；超长时会保留前、中、末段。",
+    "default": 12000
+  },
+  "subtitle_page_limit": {
+    "type": "int",
+    "description": "【AI 总结】最多读取几 P 字幕",
+    "hint": "推荐 3。多 P 视频只读取前几 P；填 0 读取全部分 P，最多 20 P。",
+    "default": 3
+  },
+  "summary_fallback_to_metadata": {
+    "type": "bool",
+    "description": "【AI 总结】无字幕时是否使用标题简介",
+    "hint": "推荐关闭。开启后没有字幕的视频也会生成概要，但它只根据标题/简介，不代表真实视频内容。",
+    "default": false
+  },
+  "enable_voice_transcription": {
+    "type": "bool",
+    "description": "【AI 总结】使用语音转文字",
+    "hint": "推荐先关闭。开启后会下载临时视频，用 faster-whisper 转写后再总结；需先手动安装 ffmpeg 和 faster-whisper，并填写妖狐 API Key，速度较慢。",
+    "default": false
+  },
+  "voice_transcription_model": {
+    "type": "string",
+    "description": "【AI 总结/高级】语音模型",
+    "hint": "新手保持 small。medium 更准但更慢、更占内存；首次使用会下载模型并长期缓存。",
+    "default": "small"
+  },
+  "voice_transcription_device": {
+    "type": "string",
+    "description": "【AI 总结/高级】语音模型运行设备",
+    "hint": "没有 NVIDIA CUDA 环境就保持 cpu；只有确认显卡和 CUDA 可用时才选 cuda。",
+    "options": ["cpu", "cuda"],
+    "default": "cpu"
+  },
+  "voice_transcription_compute_type": {
+    "type": "string",
+    "description": "【AI 总结/高级】语音模型精度",
+    "hint": "CPU 推荐 int8；CUDA 推荐 float16。选错可能导致模型无法加载。",
+    "options": ["int8", "float16", "float32"],
+    "default": "int8"
+  },
+  "voice_transcription_max_mb": {
+    "type": "int",
+    "description": "【AI 总结/高级】转写临时视频上限（MB）",
+    "hint": "推荐 200。只限制转写过程中的临时文件，转写完成后自动删除。",
+    "default": 200
+  },
+  "voice_transcription_timeout_seconds": {
+    "type": "int",
+    "description": "【AI 总结/高级】语音转写超时（秒）",
+    "hint": "推荐 600。视频较长或 CPU 较慢时可适当调大。",
+    "default": 600
+  },
+  "bilibili_sessdata": {
+    "type": "string",
+    "description": "【AI 总结/高级】B 站 SESSDATA（可选）",
+    "hint": "新手留空。只有想读取登录后才显示的 B 站 AI 字幕时填写 Cookie 中 SESSDATA= 后面的值；改动后重载插件。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "ai_timeout_seconds": {
+    "type": "int",
+    "description": "【AI 总结/高级】模型请求超时（秒）",
+    "hint": "推荐 60。模型响应较慢时调大；超时不会影响基础视频卡片发送。",
+    "default": 60
+  },
+  "featured_comment_candidates": {
+    "type": "int",
+    "description": "【评论】热门评论候选数",
+    "hint": "推荐 8：从热门评论前 8 条里随机抽取。填 0 关闭评论获取。",
+    "default": 8
+  },
+  "featured_comment_count": {
+    "type": "int",
+    "description": "【评论】长图显示几条主评论",
+    "hint": "推荐 2，可填 0-5。填 0 关闭评论区；数量越多，长图越长。",
+    "default": 2
+  },
+  "comment_reply_count": {
+    "type": "int",
+    "description": "【评论】每条评论显示几条回复",
+    "hint": "推荐 2，可填 0-3。填 0 不显示回复；回复会带头像、昵称和内容。",
+    "default": 2
+  },
+  "comment_timeout_seconds": {
+    "type": "int",
+    "description": "【评论/高级】评论请求超时（秒）",
+    "hint": "推荐 5。评论接口异常时会跳过评论，不影响视频解析。",
+    "default": 5
+  },
+  "yaohud_api_key": {
+    "type": "string",
+    "description": "【下载/语音转写】妖狐 API Key",
+    "hint": "开启视频下载或语音转写时必填；只填写 Key 本身，不要带引号。插件不会把 B 站 Cookie 发给妖狐。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "enable_video_download": {
+    "type": "bool",
+    "description": "【视频下载】开启关键词下载",
+    "hint": "新手默认关闭。开启后可使用卡片编号下载；若同时开启“解析后自动下载并发送”，则会自动下载 P1。需要妖狐 API Key。",
+    "default": false
+  },
+  "video_download_auto_send": {
+    "type": "bool",
+    "description": "【视频下载】解析后自动下载并发送",
+    "hint": "默认关闭。开启后，解析到视频会在卡片发送后自动下载并发送 P1，不再显示下载编号；仍受权限、时长、体积、次数、队列和并发限制。群聊中请谨慎开启。",
+    "default": false
+  },
+  "hide_download_hint_when_unavailable": {
+    "type": "bool",
+    "description": "【视频下载】不满足条件时隐藏提示",
+    "hint": "推荐开启。没有 Key、没有权限或视频超过时长上限时，不生成无效编号；文件大小仍会在实际下载时检查。",
+    "default": true
+  },
+  "video_download_keyword": {
+    "type": "string",
+    "description": "【视频下载】下载命令前缀",
+    "hint": "新手保持“视频下载”。最终命令示例：视频下载 482731；必须完整照抄卡片提示。",
+    "default": "视频下载"
+  },
+  "video_download_code_digits": {
+    "type": "int",
+    "description": "【视频下载】编号长度",
+    "hint": "推荐 6，可填 4-10。编号越长越不容易被猜中。",
+    "default": 6
+  },
+  "video_download_request_ttl_seconds": {
+    "type": "int",
+    "description": "【视频下载】编号有效期（秒）",
+    "hint": "推荐 300（5 分钟）。过期后必须重新发送视频链接获取新编号。",
+    "default": 300
+  },
+  "video_download_permission": {
+    "type": "string",
+    "description": "【视频下载】谁可以下载",
+    "hint": "推荐 all。admin 仅管理员；allowlist 允许管理员和下方白名单用户。",
+    "options": ["all", "admin", "allowlist"],
+    "default": "all"
+  },
+  "video_download_allowlist": {
+    "type": "string",
+    "description": "【视频下载】白名单用户 ID",
+    "hint": "仅在上项选择 allowlist 时生效。填写 QQ/用户 ID，多个用英文逗号分隔。",
+    "default": ""
+  },
+  "video_download_cooldown_seconds": {
+    "type": "int",
+    "description": "【视频下载/防刷】单用户冷却（秒）",
+    "hint": "推荐 30。用户两次成功下载至少间隔 30 秒；填 0 关闭。",
+    "default": 30
+  },
+  "video_download_daily_limit": {
+    "type": "int",
+    "description": "【视频下载/防刷】每日下载上限",
+    "hint": "推荐 5。填 0 关闭；统计保存在内存中，重启插件会重置。",
+    "default": 5
+  },
+  "video_download_max_concurrency": {
+    "type": "int",
+    "description": "【视频下载/高级】同时下载数",
+    "hint": "推荐 1。调大可能占满带宽和内存；修改后需要重载插件。",
+    "default": 1
+  },
+  "video_download_max_queue": {
+    "type": "int",
+    "description": "【视频下载/防刷】排队任务上限",
+    "hint": "推荐 10。只限制等待中的下载，队列满时新请求会提示稍后重试；填 0 关闭限制。",
+    "default": 10
+  },
+  "video_download_max_duration_seconds": {
+    "type": "int",
+    "description": "【视频下载/防刷】视频最长时长（秒）",
+    "hint": "推荐 900（15 分钟）。超过后拒绝下载；填 0 关闭时长限制。",
+    "default": 900
+  },
+  "video_download_max_mb": {
+    "type": "int",
+    "description": "【视频下载/防刷】视频最大体积（MB）",
+    "hint": "推荐 100。超过后停止下载并清理临时文件；视频会转 Base64 发送，建议不要调太大。",
+    "default": 100
+  },
+  "video_download_timeout_seconds": {
+    "type": "int",
+    "description": "【视频下载/高级】下载超时（秒）",
+    "hint": "推荐 180。网络较慢时可调大，避免任务过早失败。",
+    "default": 180
+  },
+  "yaohud_output": {
+    "type": "string",
+    "description": "【高级】是否额外发送视频直链",
+    "hint": "推荐 off。link 会额外发送一个可能很快失效的直链；视频文件请使用关键词下载。",
+    "options": [
+      "off",
+      "link"
+    ],
+    "default": "off"
+  },
+  "request_timeout_seconds": {
+    "type": "int",
+    "description": "【高级】B 站接口超时（秒）",
+    "hint": "推荐 15。网络较慢时可调大；一般不需要修改。",
+    "default": 15
+  },
+  "video_cache_seconds": {
+    "type": "int",
+    "description": "【高级】视频信息缓存时间（秒）",
+    "hint": "推荐 300。只保存在内存中，用于减少重复请求；填 0 关闭。",
+    "default": 300
+  },
+  "card_cache_seconds": {
+    "type": "int",
+    "description": "【高级】长图缓存时间（秒）",
+    "hint": "推荐 300。相同内容会复用已经生成的长图；填 0 关闭。",
+    "default": 300
+  },
+  "render_mode": {
+    "type": "string",
+    "description": "【基础】输出样式",
+    "hint": "推荐 image_card 发送长图；服务器无法渲染长图时可改成 text。",
+    "options": [
+      "image_card",
+      "text"
+    ],
+    "default": "image_card"
+  },
+  "show_error_message": {
+    "type": "bool",
+    "description": "【基础】解析失败时发送提示",
+    "hint": "推荐开启。关闭后失败时不发错误提示，只记录日志。",
+    "default": true
+  }
+}

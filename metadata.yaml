@@ -1,0 +1,8 @@
+name: astrbot_plugin_bilibili_media_parser
+display_name: B站视频/音频解析
+desc: 自动识别并解析 B 站视频/音频链接和 QQ 小程序分享，可选使用 AstrBot 已配置的模型商生成视频总结。
+short_desc: B站视频/音频链接、小程序解析与 AI 总结。
+version: v1.0.0
+author: xiaowan
+repo: https://github.com/xiaowan138/astrbot_plugin_bilibili_media_parser
+astrbot_version: ">=4.5.7,<5"

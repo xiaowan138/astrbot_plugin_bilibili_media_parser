@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-width: 900px;
+      background: #f2afc2;
+      color: #18191c;
+      font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+    .canvas { width: 100%; padding: 26px; }
+    .topbar {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      background: #fb7299;
+      color: #ffffff;
+      border: 2px solid #18191c;
+      border-bottom: 0;
+      border-radius: 8px 8px 0 0;
+    }
+    .brand { font-size: 26px; font-weight: 800; }
+    .brand-sub { font-size: 15px; font-weight: 600; }
+    .card {
+      padding: 30px;
+      background: #ffffff;
+      border: 2px solid #18191c;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 10px 10px 0 #d97998;
+    }
+    .author {
+      display: flex;
+      align-items: center;
+      min-height: 76px;
+      margin-bottom: 24px;
+    }
+    .avatar {
+      width: 72px;
+      height: 72px;
+      flex: 0 0 72px;
+      margin-right: 18px;
+      border: 2px solid #18191c;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #f1f2f3;
+    }
+    .avatar-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fb7299;
+      font-size: 25px;
+      font-weight: 800;
+    }
+    .author-name { font-size: 24px; font-weight: 750; }
+    .author-meta { margin-top: 7px; color: #6d757a; font-size: 15px; }
+    .title {
+      margin: 0 0 16px;
+      font-size: 34px;
+      line-height: 1.35;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-bottom: 24px;
+    }
+    .meta-item {
+      padding: 7px 10px;
+      color: #4e5358;
+      background: #f1f2f3;
+      border: 1px solid #d8dadd;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 650;
+    }
+    .cover {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      background: #e3e5e7;
+      border: 2px solid #18191c;
+      border-radius: 8px;
+    }
+    .cover-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6d757a;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .section { margin-top: 28px; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .section-title::before {
+      content: "";
+      width: 7px;
+      height: 26px;
+      margin-right: 11px;
+      background: #fb7299;
+      border: 1px solid #18191c;
+    }
+    .copy {
+      font-size: 18px;
+      line-height: 1.75;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 30px;
+      overflow: hidden;
+      background: #c9ccd0;
+      border: 1px solid #c9ccd0;
+      border-radius: 8px;
+    }
+    .stat {
+      min-width: 0;
+      height: 92px;
+      padding: 15px 12px;
+      background: #f6f7f8;
+      text-align: center;
+    }
+    .stat-label { color: #6d757a; font-size: 13px; font-weight: 650; }
+    .stat-value {
+      margin-top: 7px;
+      color: #18191c;
+      font-size: 19px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 116px;
+      gap: 22px;
+      align-items: center;
+      margin-top: 28px;
+      padding-top: 22px;
+      border-top: 2px solid #18191c;
+    }
+    .footer.no-qr { grid-template-columns: minmax(0, 1fr); }
+    .audio-id { color: #fb7299; font-size: 22px; font-weight: 800; }
+    .url { margin-top: 8px; color: #6d757a; font-size: 13px; overflow-wrap: anywhere; }
+    .qr {
+      width: 116px;
+      height: 116px;
+      padding: 5px;
+      background: #ffffff;
+      border: 2px solid #18191c;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="canvas">
+    <header class="topbar">
+      <div class="brand">BILIBILI · AUDIO</div>
+      <div class="brand-sub">B站音频解析</div>
+    </header>
+    <article class="card">
+      <section class="author">
+        {% if avatar_src %}
+        <img class="avatar" src="{{ avatar_src | safe }}" alt="" decoding="sync">
+        {% else %}
+        <div class="avatar avatar-fallback">UP</div>
+        {% endif %}
+        <div>
+          <div class="author-name">{{ owner_name | safe }}</div>
+          <div class="author-meta">UID {{ owner_mid }}</div>
+        </div>
+      </section>
+
+      <h1 class="title">{{ title | safe }}</h1>
+      <div class="meta-row">
+        <span class="meta-item">{{ author | safe }}</span>
+        <span class="meta-item">时长 {{ duration }}</span>
+        <span class="meta-item">{{ au_id | safe }}</span>
+      </div>
+
+      {% if cover_src %}
+      <img class="cover" src="{{ cover_src | safe }}" alt="" decoding="sync">
+      {% else %}
+      <div class="cover cover-fallback">封面暂时无法加载</div>
+      {% endif %}
+
+      <section class="section">
+        <div class="section-title">音频简介</div>
+        <div class="copy">{{ description | safe }}</div>
+      </section>
+
+      <section class="stats">
+        {% for stat in stats %}
+        <div class="stat">
+          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-value">{{ stat.value }}</div>
+        </div>
+        {% endfor %}
+      </section>
+
+      <footer class="footer {{ footer_class }}">
+        <div>
+          <div class="audio-id">{{ au_id | safe }}</div>
+          <div class="url">{{ canonical_url | safe }}</div>
+        </div>
+        {% if qr_src %}<img class="qr" src="{{ qr_src | safe }}" alt="二维码" decoding="sync">{% endif %}
+      </footer>
+    </article>
+  </main>
+</body>
+</html>
