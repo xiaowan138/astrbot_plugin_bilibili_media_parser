@@ -1,5 +1,10 @@
 import unittest
-from bilibili_parser.models import CommentReply, FeaturedComment, video_from_view_data
+from bilibili_parser.models import (
+    CommentReply,
+    FeaturedComment,
+    audio_from_api_data,
+    video_from_view_data,
+)
 from bilibili_parser.renderer import build_card_context, format_count
 
 
@@ -49,6 +54,32 @@ class ModelsAndRendererTests(unittest.TestCase):
     def test_rejects_incomplete_payload(self):
         with self.assertRaises(ValueError):
             video_from_view_data({"bvid": "BV1xx411c7mD"})
+
+    def test_maps_audio_payload(self):
+        audio = audio_from_api_data(
+            {
+                "id": 10004684671,
+                "uid": 3691000742545747,
+                "uname": "UP主",
+                "author": "作者",
+                "title": "测试曲目",
+                "cover": "https://i0.hdslb.com/bfs/music/test.jpg",
+                "intro": "简介",
+                "duration": 254,
+                "statistic": {"play": 25255, "collect": 2940, "comment": 347},
+            }
+        )
+        self.assertEqual(audio.au_id, 10004684671)
+        self.assertEqual(audio.owner_mid, 3691000742545747)
+        self.assertEqual(audio.owner_name, "UP主")
+        self.assertEqual(audio.play_count, 25255)
+        self.assertEqual(
+            audio.canonical_url, "https://www.bilibili.com/audio/au10004684671"
+        )
+
+    def test_rejects_incomplete_audio_payload(self):
+        with self.assertRaises(ValueError):
+            audio_from_api_data({"title": "只有标题"})
 
     def test_count_formatting(self):
         self.assertEqual(format_count(9999), "9999")

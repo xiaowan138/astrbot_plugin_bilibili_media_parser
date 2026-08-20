@@ -93,7 +93,7 @@ def audio_from_api_data(data: dict[str, Any]) -> AudioInfo:
         duration=_as_int(data.get("duration")),
         description=_as_str(data.get("intro") or data.get("description")),
         owner_name=_as_str(data.get("uname")),
-        owner_mid=_as_int(data.get("mid")),
+        owner_mid=_as_int(data.get("uid")),
         play_count=_as_int(statistic.get("play")),
         collect_count=_as_int(statistic.get("collect")),
         comment_count=_as_int(statistic.get("comment")),

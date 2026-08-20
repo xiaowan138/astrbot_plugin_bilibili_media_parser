@@ -28,6 +28,7 @@ from .yaohud import YAO_HUD_ENDPOINT, find_direct_media_url, is_allowed_media_ur
 
 
 API_BASE = "https://api.bilibili.com"
+AUDIO_API_BASE = "https://www.bilibili.com"
 _SHORT_HOSTS = {"b23.tv", "bili2233.cn", "www.bili2233.cn"}
 _PAGE_HOSTS = {"bilibili.com", "www.bilibili.com", "m.bilibili.com"}
 _IMAGE_HOST_SUFFIXES = (".hdslb.com", ".bilibili.com")
@@ -175,7 +176,7 @@ class BilibiliApiClient:
         for _ in range(6):
             self._validate_bilibili_url(current)
             direct = extract_video_reference(current)
-            if direct and direct.kind in {"bvid", "aid"}:
+            if direct and direct.kind in {"bvid", "aid", "auid"}:
                 return ResolvedVideo(direct.kind, direct.value)
 
             session = await self._get_session()
@@ -202,11 +203,11 @@ class BilibiliApiClient:
             embedded = _embedded_reference(body)
             if embedded is None:
                 embedded = extract_video_reference(body)
-            if embedded and embedded.kind in {"bvid", "aid"}:
+            if embedded and embedded.kind in {"bvid", "aid", "auid"}:
                 return ResolvedVideo(embedded.kind, embedded.value)
             break
 
-        raise BilibiliApiError("没有从链接中找到有效的 BV/AV 号")
+        raise BilibiliApiError("没有从链接中找到有效的 BV/AV/AU 号")
 
     async def fetch_video_info(self, resolved: ResolvedVideo) -> VideoInfo:
         params = {"bvid": resolved.value} if resolved.kind == "bvid" else {"aid": resolved.value}
@@ -225,8 +226,9 @@ class BilibiliApiClient:
         except (ValueError, TypeError) as exc:
             raise BilibiliApiError(f"音频 AU 号格式无效：{resolved.value}") from exc
         payload = await self._get_api_json(
-            "/audio/music-service-c/songs/info",
+            "/audio/music-service-c/web/song/info",
             {"sid": au_id},
+            base=AUDIO_API_BASE,
         )
         try:
             return audio_from_api_data(payload)
@@ -561,9 +563,15 @@ class BilibiliApiClient:
                 return
         raise BilibiliApiError("视频下载跳转次数过多")
 
-    async def _get_api_json(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _get_api_json(
+        self,
+        path: str,
+        params: dict[str, Any],
+        *,
+        base: str = API_BASE,
+    ) -> dict[str, Any]:
         data = await self._get_json_url(
-            API_BASE + path, params=params, include_bilibili_cookie=True
+            base + path, params=params, include_bilibili_cookie=True
         )
         if not isinstance(data, dict):
             raise BilibiliApiError("B 站接口返回了无效数据")

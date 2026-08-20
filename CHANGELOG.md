@@ -1,5 +1,10 @@
 # 更新记录
 
+## v1.0.1
+
+- 修复 B 站音频解析接口错误：改用正确的 `www.bilibili.com/audio/music-service-c/web/song/info` 接口，并修正 UP 主 UID 字段读取（`uid` 而非 `mid`），音频解析现在可以正常工作。
+- 短链解析支持识别音频（AU）链接。
+
 ## v1.0.0
 
 - 首个版本。自动识别并解析 B 站视频/音频链接、`BV`/`AV` 号、`b23.tv` 短链和 QQ 小程序分享。
