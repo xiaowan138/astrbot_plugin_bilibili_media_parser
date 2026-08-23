@@ -6,7 +6,7 @@ import io
 from datetime import datetime
 from typing import Any, Mapping
 
-from .models import AudioInfo, VideoInfo
+from .models import ArticleInfo, AudioInfo, DynamicInfo, LiveInfo, VideoInfo
 
 
 def format_count(value: int) -> str:
@@ -193,4 +193,208 @@ def build_audio_text_fallback(audio: AudioInfo) -> str:
         lines.extend(["简介：", _truncate(audio.description, 360)])
     if audio.owner_name:
         lines.append(f"上传者：{audio.owner_name}")
+    return "\n".join(lines)
+
+
+def _content_card_context(
+    *,
+    brand_sub: str,
+    content_type: str,
+    title: str,
+    author_name: str,
+    author_meta: str,
+    avatar_src: str,
+    meta_items: list[tuple[str, str]],
+    cover_src: str,
+    body_title: str,
+    body_text: str,
+    tags: list[str],
+    stats: list[tuple[str, int]],
+    content_id: str,
+    canonical_url: str,
+    qr_src: str,
+) -> dict[str, Any]:
+    """Shared context builder for article/live/dynamic cards."""
+    return {
+        "brand_sub": _escape(brand_sub),
+        "content_type": _escape(content_type),
+        "title": _escape(title),
+        "author_name": _escape(author_name),
+        "author_meta": _escape(author_meta),
+        "avatar_src": _escape(avatar_src),
+        "meta_items": [
+            {"label": _escape(label), "value": _escape(value)}
+            for label, value in meta_items
+        ],
+        "cover_src": _escape(cover_src),
+        "body_title": _escape(body_title),
+        "body_text": _escape(body_text),
+        "tags": [_escape(tag) for tag in tags if tag],
+        "stats": [
+            {"label": _escape(label), "value": format_count(value)}
+            for label, value in stats
+        ],
+        "content_id": _escape(content_id),
+        "canonical_url": _escape(canonical_url),
+        "qr_src": _escape(qr_src),
+        "footer_class": "" if qr_src else "no-qr",
+    }
+
+
+def build_article_card_context(
+    article: ArticleInfo,
+    *,
+    cover_src: str = "",
+    avatar_src: str = "",
+    qr_src: str = "",
+) -> dict[str, Any]:
+    published = (
+        datetime.fromtimestamp(article.publish_at).strftime("%Y-%m-%d %H:%M")
+        if article.publish_at
+        else "未知时间"
+    )
+    summary = _truncate(article.summary, 520) or "作者暂未填写专栏摘要。"
+    return _content_card_context(
+        brand_sub="B站专栏解析",
+        content_type="专栏",
+        title=article.title,
+        author_name=article.owner_name or "未知作者",
+        author_meta=f"UID {article.owner_mid}",
+        avatar_src=avatar_src,
+        meta_items=[
+            ("分类", article.category or "专栏"),
+            ("字数", f"{article.words} 字"),
+            ("发布", published),
+        ],
+        cover_src=cover_src,
+        body_title="专栏摘要",
+        body_text=summary,
+        tags=article.tags,
+        stats=[
+            ("阅读", article.stats.view),
+            ("点赞", article.stats.like),
+            ("投币", article.stats.coin),
+            ("收藏", article.stats.favorite),
+            ("评论", article.stats.reply),
+            ("分享", article.stats.share),
+        ],
+        content_id=f"cv{article.article_id}",
+        canonical_url=article.canonical_url,
+        qr_src=qr_src,
+    )
+
+
+def build_live_card_context(
+    live: LiveInfo,
+    *,
+    cover_src: str = "",
+    avatar_src: str = "",
+    qr_src: str = "",
+) -> dict[str, Any]:
+    status_label = {0: "未开播", 1: "直播中", 2: "轮播中"}.get(
+        live.live_status, "未知"
+    )
+    area = " / ".join(part for part in (live.parent_area_name, live.area_name) if part)
+    description = _truncate(live.description, 520) or "主播暂未填写直播简介。"
+    tags = [tag.strip() for tag in live.tags.split(",") if tag.strip()]
+    return _content_card_context(
+        brand_sub="B站直播解析",
+        content_type="直播",
+        title=live.title or "未命名直播间",
+        author_name=live.owner_name or "未知主播",
+        author_meta=f"UID {live.owner_mid}",
+        avatar_src=avatar_src,
+        meta_items=[
+            ("分区", area or "直播"),
+            ("状态", status_label),
+        ],
+        cover_src=cover_src,
+        body_title="直播简介",
+        body_text=description,
+        tags=tags,
+        stats=[("在线人数", live.online)],
+        content_id=f"live{live.room_id}",
+        canonical_url=live.canonical_url,
+        qr_src=qr_src,
+    )
+
+
+def build_dynamic_card_context(
+    dynamic: DynamicInfo,
+    *,
+    cover_src: str = "",
+    avatar_src: str = "",
+    qr_src: str = "",
+) -> dict[str, Any]:
+    published = (
+        datetime.fromtimestamp(dynamic.publish_at).strftime("%Y-%m-%d %H:%M")
+        if dynamic.publish_at
+        else "未知时间"
+    )
+    content = _truncate(dynamic.content, 700) or "这条动态没有文字内容。"
+    return _content_card_context(
+        brand_sub="B站动态解析",
+        content_type="动态",
+        title=_truncate(dynamic.content, 40) or "动态内容",
+        author_name=dynamic.author_name,
+        author_meta=f"UID {dynamic.author_mid}",
+        avatar_src=avatar_src,
+        meta_items=[("发布", published)],
+        cover_src=cover_src,
+        body_title="动态内容",
+        body_text=content,
+        tags=[],
+        stats=[
+            ("点赞", dynamic.like_count),
+            ("评论", dynamic.comment_count),
+            ("转发", dynamic.forward_count),
+            ("收藏", dynamic.favorite_count),
+        ],
+        content_id=f"opus{dynamic.dyn_id}",
+        canonical_url=dynamic.canonical_url,
+        qr_src=qr_src,
+    )
+
+
+def build_article_text_fallback(article: ArticleInfo) -> str:
+    stats = article.stats
+    lines = [
+        f"【B站专栏】{article.title}",
+        f"作者：{article.owner_name}  |  字数：{article.words}",
+        (
+            f"阅读 {format_count(stats.view)}  点赞 {format_count(stats.like)}  "
+            f"评论 {format_count(stats.reply)}"
+        ),
+    ]
+    if article.summary:
+        lines.extend(["摘要：", _truncate(article.summary, 360)])
+    return "\n".join(lines)
+
+
+def build_live_text_fallback(live: LiveInfo) -> str:
+    status_label = {0: "未开播", 1: "直播中", 2: "轮播中"}.get(
+        live.live_status, "未知"
+    )
+    lines = [
+        f"【B站直播】{live.title or '未命名直播间'}",
+        (
+            f"主播：{live.owner_name or '未知'}  |  状态：{status_label}  |  "
+            f"在线：{format_count(live.online)}"
+        ),
+    ]
+    if live.description:
+        lines.extend(["简介：", _truncate(live.description, 360)])
+    return "\n".join(lines)
+
+
+def build_dynamic_text_fallback(dynamic: DynamicInfo) -> str:
+    lines = [
+        f"【B站动态】{dynamic.author_name}",
+        _truncate(dynamic.content, 500) or "这条动态没有文字内容。",
+        (
+            f"点赞 {format_count(dynamic.like_count)}  "
+            f"评论 {format_count(dynamic.comment_count)}  "
+            f"转发 {format_count(dynamic.forward_count)}"
+        ),
+    ]
     return "\n".join(lines)

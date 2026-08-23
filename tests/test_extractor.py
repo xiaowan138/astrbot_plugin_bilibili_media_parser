@@ -78,6 +78,28 @@ class ExtractorTests(unittest.TestCase):
         )
         self.assertEqual((result.kind, result.value), ("bvid", "BV1xx411c7mD"))
 
+    def test_extracts_article_url(self):
+        result = extract_video_reference(
+            "https://www.bilibili.com/read/cv300010?from=search"
+        )
+        self.assertEqual((result.kind, result.value), ("article", "300010"))
+
+    def test_extracts_live_url(self):
+        result = extract_video_reference(
+            "来看看直播 https://live.bilibili.com/12345?spm_id_from=333.999"
+        )
+        self.assertEqual((result.kind, result.value), ("live", "12345"))
+
+    def test_extracts_opus_dynamic_url(self):
+        result = extract_video_reference(
+            "https://www.bilibili.com/opus/967717348014293017"
+        )
+        self.assertEqual((result.kind, result.value), ("dynamic", "967717348014293017"))
+
+    def test_extracts_t_bilibili_dynamic_url(self):
+        result = extract_video_reference("https://t.bilibili.com/123456")
+        self.assertEqual((result.kind, result.value), ("dynamic", "123456"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,10 @@ import unittest
 from bilibili_parser.models import (
     CommentReply,
     FeaturedComment,
+    article_from_api_data,
     audio_from_api_data,
+    dynamic_from_page_state,
+    live_from_api_data,
     video_from_view_data,
 )
 from bilibili_parser.renderer import build_card_context, format_count
@@ -80,6 +83,141 @@ class ModelsAndRendererTests(unittest.TestCase):
     def test_rejects_incomplete_audio_payload(self):
         with self.assertRaises(ValueError):
             audio_from_api_data({"title": "只有标题"})
+
+    def test_maps_article_payload(self):
+        article = article_from_api_data(
+            {
+                "id": 300010,
+                "title": "测试专栏",
+                "summary": "摘要内容",
+                "banner_url": "https://i0.hdslb.com/bfs/article/banner.jpg",
+                "category": {"id": 6, "name": "单机游戏"},
+                "author": {"mid": 14211580, "name": "作者甲", "face": "https://i1.hdslb.com/bfs/face/a.jpg"},
+                "publish_time": 1700000000,
+                "words": 1051,
+                "stats": {"view": 4471, "like": 52, "coin": 5, "favorite": 58, "reply": 10, "share": 3},
+                "tags": [{"name": "独立游戏"}, {"name": "奇幻"}],
+            }
+        )
+        self.assertEqual(article.article_id, 300010)
+        self.assertEqual(article.owner_name, "作者甲")
+        self.assertEqual(article.stats.view, 4471)
+        self.assertEqual(article.category, "单机游戏")
+        self.assertEqual(article.tags, ["独立游戏", "奇幻"])
+        self.assertEqual(
+            article.canonical_url, "https://www.bilibili.com/read/cv300010"
+        )
+
+    def test_maps_live_payload(self):
+        live = live_from_api_data(
+            {
+                "room_id": 5440,
+                "uid": 9617619,
+                "title": "测试直播间",
+                "user_cover": "https://i0.hdslb.com/bfs/live/cover.jpg",
+                "online": 1200,
+                "live_status": 1,
+                "parent_area_name": "虚拟主播",
+                "area_name": "虚拟日常",
+                "description": "直播简介",
+                "tags": "虚拟,歌会",
+            }
+        )
+        self.assertEqual(live.room_id, 5440)
+        self.assertEqual(live.owner_mid, 9617619)
+        self.assertEqual(live.live_status, 1)
+        self.assertEqual(live.online, 1200)
+        self.assertEqual(
+            live.canonical_url, "https://live.bilibili.com/5440"
+        )
+
+    def test_maps_dynamic_page_state(self):
+        state = {
+            "id": "967717348014293017",
+            "detail": {
+                "modules": [
+                    {
+                        "module_type": "MODULE_TYPE_AUTHOR",
+                        "module_author": {
+                            "name": "动态作者",
+                            "mid": 645769214,
+                            "face": "https://i2.hdslb.com/bfs/face/f.jpg",
+                            "pub_ts": 1724152653,
+                        },
+                    },
+                    {
+                        "module_type": "MODULE_TYPE_CONTENT",
+                        "module_content": {
+                            "paragraphs": [
+                                {
+                                    "text": {
+                                        "nodes": [
+                                            {
+                                                "type": "TEXT_NODE_TYPE_WORD",
+                                                "word": {"words": "第一行内容"},
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "text": {
+                                        "nodes": [
+                                            {
+                                                "type": "TEXT_NODE_TYPE_WORD",
+                                                "word": {"words": "第二行内容"},
+                                            }
+                                        ]
+                                    }
+                                },
+                            ]
+                        },
+                    },
+                    {
+                        "module_type": "MODULE_TYPE_TOP",
+                        "module_top": {
+                            "display": {
+                                "album": {
+                                    "pics": [
+                                        {"url": "https://i0.hdslb.com/bfs/new_dyn/pic.jpg"}
+                                    ]
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "module_type": "MODULE_TYPE_STAT",
+                        "module_stat": {
+                            "like": {"count": 73},
+                            "comment": {"count": 43},
+                            "forward": {"count": 2},
+                            "favorite": {"count": 28},
+                        },
+                    },
+                ]
+            },
+        }
+        dynamic = dynamic_from_page_state(state)
+        self.assertEqual(dynamic.dyn_id, "967717348014293017")
+        self.assertEqual(dynamic.author_name, "动态作者")
+        self.assertEqual(dynamic.content, "第一行内容\n第二行内容")
+        self.assertEqual(dynamic.like_count, 73)
+        self.assertEqual(dynamic.images, ["https://i0.hdslb.com/bfs/new_dyn/pic.jpg"])
+        self.assertEqual(
+            dynamic.canonical_url,
+            "https://www.bilibili.com/opus/967717348014293017",
+        )
+
+    def test_rejects_incomplete_article_payload(self):
+        with self.assertRaises(ValueError):
+            article_from_api_data({"title": "只有标题"})
+
+    def test_rejects_incomplete_live_payload(self):
+        with self.assertRaises(ValueError):
+            live_from_api_data({"title": "没有房间号"})
+
+    def test_rejects_incomplete_dynamic_payload(self):
+        with self.assertRaises(ValueError):
+            dynamic_from_page_state({"detail": {"modules": []}})
 
     def test_count_formatting(self):
         self.assertEqual(format_count(9999), "9999")

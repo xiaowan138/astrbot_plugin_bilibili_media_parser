@@ -13,6 +13,7 @@ import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -26,11 +27,23 @@ from .bilibili_parser.api_client import (
 )
 from .bilibili_parser.duplicate_guard import DuplicateGuard
 from .bilibili_parser.extractor import extract_video_reference
-from .bilibili_parser.models import AudioInfo, VideoInfo
+from .bilibili_parser.models import (
+    ArticleInfo,
+    AudioInfo,
+    DynamicInfo,
+    LiveInfo,
+    VideoInfo,
+)
 from .bilibili_parser.renderer import (
+    build_article_card_context,
+    build_article_text_fallback,
     build_audio_card_context,
     build_audio_text_fallback,
     build_card_context,
+    build_dynamic_card_context,
+    build_dynamic_text_fallback,
+    build_live_card_context,
+    build_live_text_fallback,
     build_text_fallback,
     format_duration,
     make_qr_data_uri,
@@ -77,8 +90,12 @@ class BilibiliParserPlugin(Star):
         self._audio_template = (
             Path(__file__).parent / "templates" / "audio_card.html"
         ).read_text(encoding="utf-8")
+        self._content_template = (
+            Path(__file__).parent / "templates" / "content_card.html"
+        ).read_text(encoding="utf-8")
         self._cache: dict[str, tuple[float, VideoInfo]] = {}
         self._audio_cache: dict[str, tuple[float, AudioInfo]] = {}
+        self._content_cache: dict[str, tuple[float, Any]] = {}
         self._inflight: dict[str, asyncio.Task[VideoInfo]] = {}
         self._cache_lock = asyncio.Lock()
         self._card_cache: dict[str, tuple[float, str]] = {}
@@ -137,6 +154,11 @@ class BilibiliParserPlugin(Star):
 
             if reference.kind == "auid":
                 async for result in self._handle_audio(event, reference):
+                    yield result
+                return
+
+            if reference.kind in {"article", "live", "dynamic"}:
+                async for result in self._handle_content_card(event, reference):
                     yield result
                 return
 
@@ -403,6 +425,194 @@ class BilibiliParserPlugin(Star):
             self._card_cache[cache_key] = (now, image_path)
             self._prune_card_cache(card_ttl)
         return image_path
+
+    async def _handle_content_card(
+        self, event: AstrMessageEvent, reference
+    ) -> AsyncGenerator:
+        """Handle article/live/dynamic references with a shared card flow."""
+        try:
+            resolved = await self._client.resolve_reference(reference)
+        except BilibiliApiError as exc:
+            logger.warning(f"B站内容解析失败：{exc}")
+            if bool(self.config.get("show_error_message", True)):
+                yield event.plain_result(f"B站内容解析失败：{exc}")
+            return
+
+        scope = self._duplicate_scope(event)
+        if await self._duplicate_guard.check_and_mark(
+            scope, resolved.canonical_id
+        ):
+            notice = str(
+                self.config.get(
+                    "duplicate_notice",
+                    "检测到短时间内重复发送的 B 站链接，已拒绝重复解析。",
+                )
+            ).strip()
+            if notice:
+                yield event.plain_result(notice)
+            return
+
+        try:
+            info = await self._get_content_info(resolved)
+        except BilibiliApiError as exc:
+            await self._duplicate_guard.forget(scope, resolved.canonical_id)
+            logger.warning(f"B站内容解析失败：{exc}")
+            if bool(self.config.get("show_error_message", True)):
+                yield event.plain_result(f"B站内容解析失败：{exc}")
+            return
+        except Exception:
+            await self._duplicate_guard.forget(scope, resolved.canonical_id)
+            logger.exception("B站内容解析发生未预期错误")
+            if bool(self.config.get("show_error_message", True)):
+                yield event.plain_result("B站内容解析失败，请稍后重试。")
+            return
+
+        kind = resolved.kind
+        type_label = self._content_type_label(kind)
+        if self.config.get("render_mode", "image_card") == "text":
+            yield event.plain_result(
+                self._with_source_link(
+                    self._content_text_fallback(kind, info), info
+                )
+            )
+        else:
+            try:
+                image_path = await self._render_content_card(kind, info)
+            except Exception:
+                logger.exception("B站内容解析：长图卡片渲染失败，已降级为文本")
+                yield event.plain_result(
+                    self._with_source_link(
+                        self._content_text_fallback(kind, info), info
+                    )
+                )
+            else:
+                yield event.chain_result(
+                    [
+                        Comp.Image.fromFileSystem(image_path),
+                        Comp.Plain(
+                            f"B站{type_label}源链接：\n{info.canonical_url}"
+                        ),
+                    ]
+                )
+
+    async def _get_content_info(self, resolved: ResolvedVideo):
+        """Fetch article/live/dynamic info with a bounded TTL cache."""
+        key = resolved.canonical_id
+        now = time.monotonic()
+        ttl = self._config_int("video_cache_seconds", 300, 0, 86400)
+
+        async with self._cache_lock:
+            cached = self._content_cache.get(key)
+            if cached and ttl > 0 and now - cached[0] < ttl:
+                return cached[1]
+
+        if resolved.kind == "article":
+            info = await self._client.fetch_article_info(resolved)
+        elif resolved.kind == "live":
+            info = await self._client.fetch_live_info(resolved)
+        else:
+            info = await self._client.fetch_dynamic_info(resolved)
+        if ttl > 0:
+            async with self._cache_lock:
+                self._content_cache[key] = (time.monotonic(), info)
+                self._prune_content_cache(ttl)
+        return info
+
+    def _prune_content_cache(self, ttl: int) -> None:
+        if len(self._content_cache) <= 512:
+            return
+        cutoff = time.monotonic() - ttl
+        self._content_cache = {
+            cache_key: entry
+            for cache_key, entry in self._content_cache.items()
+            if entry[0] >= cutoff
+        }
+        while len(self._content_cache) > 512:
+            oldest_key = min(
+                self._content_cache,
+                key=lambda cache_key: self._content_cache[cache_key][0],
+            )
+            self._content_cache.pop(oldest_key, None)
+
+    async def _render_content_card(self, kind: str, info) -> str:
+        cache_key = f"{kind}:{info.canonical_id}"
+        now = time.monotonic()
+        card_ttl = self._config_int("card_cache_seconds", 300, 0, 3600)
+        cached = self._card_cache.get(cache_key)
+        if (
+            cached
+            and card_ttl > 0
+            and now - cached[0] < card_ttl
+            and Path(cached[1]).is_file()
+        ):
+            return cached[1]
+
+        cover_url = info.cover_url
+        if kind == "dynamic" and not cover_url and info.images:
+            cover_url = info.images[0]
+        avatar_url = (
+            getattr(info, "author_face_url", "")
+            or getattr(info, "owner_face_url", "")
+        )
+        cover_src, avatar_src = await asyncio.gather(
+            self._client.fetch_image_data_uri(cover_url, max_dimension=1280),
+            self._client.fetch_image_data_uri(avatar_url, max_dimension=160),
+        )
+        if not cover_src:
+            logger.warning("B站内容解析：封面下载失败，使用占位图：%s", cover_url)
+
+        if kind == "article":
+            data = build_article_card_context(
+                info,
+                cover_src=cover_src,
+                avatar_src=avatar_src,
+                qr_src=make_qr_data_uri(info.canonical_url),
+            )
+        elif kind == "live":
+            data = build_live_card_context(
+                info,
+                cover_src=cover_src,
+                avatar_src=avatar_src,
+                qr_src=make_qr_data_uri(info.canonical_url),
+            )
+        else:
+            data = build_dynamic_card_context(
+                info,
+                cover_src=cover_src,
+                avatar_src=avatar_src,
+                qr_src=make_qr_data_uri(info.canonical_url),
+            )
+        image_path = await self.html_render(
+            self._content_template,
+            data,
+            return_url=False,
+            options={
+                "type": "jpeg",
+                "quality": 90,
+                "full_page": True,
+                "animations": "disabled",
+                "caret": "hide",
+                "scale": "css",
+            },
+        )
+        if card_ttl > 0:
+            self._card_cache[cache_key] = (now, image_path)
+            self._prune_card_cache(card_ttl)
+        return image_path
+
+    @staticmethod
+    def _content_type_label(kind: str) -> str:
+        return {"article": "专栏", "live": "直播", "dynamic": "动态"}.get(
+            kind, "内容"
+        )
+
+    @staticmethod
+    def _content_text_fallback(kind: str, info) -> str:
+        if kind == "article":
+            return build_article_text_fallback(info)
+        if kind == "live":
+            return build_live_text_fallback(info)
+        return build_dynamic_text_fallback(info)
 
     def _prune_cache(self, ttl: int) -> None:
         """Bound the in-memory video-info cache to 512 entries."""
@@ -848,8 +1058,8 @@ class BilibiliParserPlugin(Star):
         return image_path
 
     @staticmethod
-    def _with_source_link(text: str, video: VideoInfo | AudioInfo) -> str:
-        return f"{text}\nB站源链接：\n{video.canonical_url}"
+    def _with_source_link(text: str, item: Any) -> str:
+        return f"{text}\nB站源链接：\n{item.canonical_url}"
 
     def _download_keyword(self) -> str:
         return str(self.config.get("video_download_keyword", "视频下载") or "").strip()
@@ -1200,6 +1410,7 @@ class BilibiliParserPlugin(Star):
         self._inflight.clear()
         self._pending_downloads.clear()
         self._audio_cache.clear()
+        self._content_cache.clear()
         self._card_cache.clear()
         for cancel_event in self._transcription_cancels:
             cancel_event.set()

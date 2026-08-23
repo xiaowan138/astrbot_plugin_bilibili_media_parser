@@ -6,7 +6,7 @@ import json
 import logging
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -17,11 +17,17 @@ from PIL import Image, ImageOps
 
 from .extractor import VideoReference, extract_video_reference
 from .models import (
+    ArticleInfo,
     AudioInfo,
     CommentReply,
+    DynamicInfo,
     FeaturedComment,
+    LiveInfo,
     VideoInfo,
+    article_from_api_data,
     audio_from_api_data,
+    dynamic_from_page_state,
+    live_from_api_data,
     video_from_view_data,
 )
 from .yaohud import YAO_HUD_ENDPOINT, find_direct_media_url, is_allowed_media_url
@@ -29,6 +35,7 @@ from .yaohud import YAO_HUD_ENDPOINT, find_direct_media_url, is_allowed_media_ur
 
 API_BASE = "https://api.bilibili.com"
 AUDIO_API_BASE = "https://www.bilibili.com"
+LIVE_API_BASE = "https://api.live.bilibili.com"
 _SHORT_HOSTS = {"b23.tv", "bili2233.cn", "www.bili2233.cn"}
 _PAGE_HOSTS = {"bilibili.com", "www.bilibili.com", "m.bilibili.com"}
 _IMAGE_HOST_SUFFIXES = (".hdslb.com", ".bilibili.com")
@@ -48,7 +55,19 @@ class ResolvedVideo:
 
     @property
     def canonical_id(self) -> str:
-        return self.value if self.kind == "bvid" else f"av{self.value}"
+        if self.kind == "bvid":
+            return self.value
+        if self.kind == "aid":
+            return f"av{self.value}"
+        if self.kind == "auid":
+            return f"au{self.value}"
+        if self.kind == "article":
+            return f"cv{self.value}"
+        if self.kind == "live":
+            return f"live{self.value}"
+        if self.kind == "dynamic":
+            return f"opus{self.value}"
+        return self.value
 
 
 _META_TAG_RE = re.compile(
@@ -169,7 +188,7 @@ class BilibiliApiClient:
             await self._session.close()
 
     async def resolve_reference(self, reference: VideoReference) -> ResolvedVideo:
-        if reference.kind in {"bvid", "aid", "auid"}:
+        if reference.kind in {"bvid", "aid", "auid", "article", "live", "dynamic"}:
             return ResolvedVideo(reference.kind, reference.value)
 
         current = reference.value
@@ -234,6 +253,104 @@ class BilibiliApiClient:
             return audio_from_api_data(payload)
         except ValueError as exc:
             raise BilibiliApiError(str(exc)) from exc
+
+    async def fetch_article_info(self, resolved: ResolvedVideo) -> ArticleInfo:
+        """Fetch Bilibili article (CV) metadata via the article API."""
+        if resolved.kind != "article":
+            raise BilibiliApiError(
+                f"内部错误：fetch_article_info 期望 article 类型，实际为 {resolved.kind}"
+            )
+        try:
+            article_id = int(resolved.value)
+        except (ValueError, TypeError) as exc:
+            raise BilibiliApiError(
+                f"专栏 CV 号格式无效：{resolved.value}"
+            ) from exc
+        payload = await self._get_api_json(
+            "/x/article/view",
+            {"id": article_id},
+        )
+        try:
+            return article_from_api_data(payload)
+        except ValueError as exc:
+            raise BilibiliApiError(str(exc)) from exc
+
+    async def fetch_live_info(self, resolved: ResolvedVideo) -> LiveInfo:
+        """Fetch Bilibili live room metadata via the live API."""
+        if resolved.kind != "live":
+            raise BilibiliApiError(
+                f"内部错误：fetch_live_info 期望 live 类型，实际为 {resolved.kind}"
+            )
+        try:
+            room_id = int(resolved.value)
+        except (ValueError, TypeError) as exc:
+            raise BilibiliApiError(f"直播房间号格式无效：{resolved.value}") from exc
+        data = await self._get_json_url(
+            LIVE_API_BASE + "/room/v1/Room/get_info",
+            params={"room_id": room_id},
+        )
+        if not isinstance(data, dict):
+            raise BilibiliApiError("B 站接口返回了无效数据")
+        code = data.get("code")
+        if code != 0:
+            message = str(data.get("message") or data.get("msg") or "未知错误")
+            raise BilibiliApiError(f"B 站接口错误 {code}：{message}")
+        payload = data.get("data")
+        if not isinstance(payload, dict):
+            raise BilibiliApiError("B 站接口缺少 data 字段")
+        try:
+            info = live_from_api_data(payload)
+        except ValueError as exc:
+            raise BilibiliApiError(str(exc)) from exc
+        # The room-info API does not include the anchor name. When it is
+        # missing, resolve it once from the user card by mid.
+        if not info.owner_name and info.owner_mid:
+            try:
+                card = await self._get_api_json(
+                    "/x/web-interface/card", {"mid": info.owner_mid}
+                )
+                card_data = card.get("card") if isinstance(card.get("card"), dict) else {}
+                name = str(card_data.get("name") or "").strip()
+                if name:
+                    info = replace(info, owner_name=name)
+            except BilibiliApiError:
+                pass
+        return info
+
+    async def fetch_dynamic_info(self, resolved: ResolvedVideo) -> DynamicInfo:
+        """Fetch Bilibili dynamic (opus) metadata from the server-rendered page."""
+        if resolved.kind != "dynamic":
+            raise BilibiliApiError(
+                f"内部错误：fetch_dynamic_info 期望 dynamic 类型，实际为 {resolved.kind}"
+            )
+        dyn_id = resolved.value
+        if not dyn_id:
+            raise BilibiliApiError("动态 ID 为空")
+        body = await self._get_page_text(
+            f"https://www.bilibili.com/opus/{dyn_id}"
+        )
+        state = _extract_initial_state(body)
+        if state is None:
+            raise BilibiliApiError("动态页面缺少数据")
+        try:
+            return dynamic_from_page_state(state)
+        except ValueError as exc:
+            raise BilibiliApiError(str(exc)) from exc
+
+    async def _get_page_text(self, url: str) -> str:
+        """Fetch a Bilibili page body as text (for server-rendered data)."""
+        session = await self._get_session()
+        try:
+            async with session.get(url) as response:
+                if response.status >= 400:
+                    raise BilibiliApiError(
+                        f"页面请求失败（HTTP {response.status}）"
+                    )
+                return await response.text(encoding="utf-8", errors="ignore")
+        except asyncio.TimeoutError as exc:
+            raise BilibiliApiError("请求 B 站页面超时") from exc
+        except aiohttp.ClientError as exc:
+            raise BilibiliApiError(f"请求 B 站页面失败：{exc}") from exc
 
     async def fetch_public_subtitle(
         self,

@@ -8,7 +8,7 @@ from typing import Any, Iterator, Literal
 from urllib.parse import unquote
 
 
-ReferenceKind = Literal["bvid", "aid", "auid", "url"]
+ReferenceKind = Literal["bvid", "aid", "auid", "article", "live", "dynamic", "url"]
 
 _BVID_RE = re.compile(r"(?<![0-9A-Za-z])BV[0-9A-Za-z]{10}(?![0-9A-Za-z])", re.I)
 _AID_RE = re.compile(r"(?<![0-9A-Za-z])av(\d{1,20})(?!\d)", re.I)
@@ -17,6 +17,8 @@ _BILI_URI_RE = re.compile(r"bilibili://video/(BV[0-9A-Za-z]{10}|\d{1,20})", re.I
 _URL_RE = re.compile(
     r"(?:(?:https?):?//)?(?:"
     r"(?:www\.|m\.|space\.)?bilibili\.com/[^\s<>\"']+"
+    r"|live\.bilibili\.com/[^\s<>\"']+"
+    r"|t\.bilibili\.com/[^\s<>\"']+"
     r"|b23\.tv/[^\s<>\"']+"
     r"|(?:www\.)?bili2233\.cn/[^\s<>\"']+"
     r")",
@@ -36,6 +38,12 @@ class VideoReference:
     def hint_key(self) -> str:
         if self.kind == "aid":
             return f"av{self.value}"
+        if self.kind == "article":
+            return f"cv{self.value}"
+        if self.kind == "live":
+            return f"live{self.value}"
+        if self.kind == "dynamic":
+            return f"opus{self.value}"
         return self.value
 
 
@@ -133,7 +141,9 @@ def _reference_from_text(value: str, source: str) -> VideoReference | None:
     elif url.lower().startswith("http://"):
         url = "https://" + url[7:]
 
-    # Detect audio URLs before falling through to the generic URL handler.
+    # Detect content-type URLs before falling through to the generic handler.
+    # Order matters: audio/read/opus paths are on www.bilibili.com, live/t are
+    # separate hosts; each pattern is specific enough to avoid ambiguity.
     audio_au_match = re.search(
         r"(?:www\.|m\.)?bilibili\.com/audio/au(\d{1,20})",
         url,
@@ -141,6 +151,30 @@ def _reference_from_text(value: str, source: str) -> VideoReference | None:
     )
     if audio_au_match:
         return VideoReference("auid", audio_au_match.group(1), source)
+
+    article_match = re.search(
+        r"(?:www\.|m\.)?bilibili\.com/read/cv(\d{1,20})",
+        url,
+        re.I,
+    )
+    if article_match:
+        return VideoReference("article", article_match.group(1), source)
+
+    opus_match = re.search(
+        r"(?:www\.|m\.)?bilibili\.com/opus/(\d{1,20})",
+        url,
+        re.I,
+    )
+    if opus_match:
+        return VideoReference("dynamic", opus_match.group(1), source)
+
+    t_bili_match = re.search(r"t\.bilibili\.com/(\d{1,20})", url, re.I)
+    if t_bili_match:
+        return VideoReference("dynamic", t_bili_match.group(1), source)
+
+    live_match = re.search(r"live\.bilibili\.com/(\d{1,20})", url, re.I)
+    if live_match:
+        return VideoReference("live", live_match.group(1), source)
 
     return VideoReference("url", url, source)
 

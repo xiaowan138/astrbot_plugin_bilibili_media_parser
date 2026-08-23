@@ -1,5 +1,13 @@
 # 更新记录
 
+## v1.1.0
+
+- 新增 B 站专栏（CV）解析：支持 `bilibili.com/read/cv...` 链接，展示标题、作者、分类、字数、摘要与统计。
+- 新增 B 站直播解析：支持 `live.bilibili.com/...` 链接，展示标题、主播、分区、在线人数与直播状态。
+- 新增 B 站动态解析：支持 `bilibili.com/opus/...`、`t.bilibili.com/...` 链接，展示作者、内容、图片与点赞/评论/转发统计。
+- 新增通用内容卡片模板（`templates/content_card.html`），统一渲染专栏/直播/动态。
+- 插件名称更新为「B站全内容解析」。
+
 ## v1.0.1
 
 - 修复 B 站音频解析接口错误：改用正确的 `www.bilibili.com/audio/music-service-c/web/song/info` 接口，并修正 UP 主 UID 字段读取（`uid` 而非 `mid`），音频解析现在可以正常工作。
