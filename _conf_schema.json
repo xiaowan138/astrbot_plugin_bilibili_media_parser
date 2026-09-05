@@ -21,10 +21,16 @@
     "hint": "机器人拒绝重复解析时发送的文字；留空则静默拦截。",
     "default": "检测到短时间内重复发送的 B 站链接，已拒绝重复解析。"
   },
+  "max_links_per_message": {
+    "type": "int",
+    "description": "【基础】单条消息最多解析几个链接",
+    "hint": "推荐 3，可填 1-5。一条消息里同时出现多个 B 站链接时，按出现顺序解析前几个。",
+    "default": 3
+  },
   "enable_ai_summary": {
     "type": "bool",
-    "description": "【AI 总结】启用 AI 视频总结",
-    "hint": "关闭不会调用模型。开启后优先使用 B 站字幕；需要在 AstrBot 中先配置可用模型商。",
+    "description": "【AI 总结】启用 AI 总结",
+    "hint": "关闭不会调用模型。开启后视频总结优先使用 B 站字幕，专栏/动态会用正文生成概要；需要在 AstrBot 中先配置可用模型商。",
     "default": false
   },
   "summary_provider_id": {
@@ -133,6 +139,30 @@
     "hint": "推荐 5。评论接口异常时会跳过评论，不影响视频解析。",
     "default": 5
   },
+  "live_query_keyword": {
+    "type": "string",
+    "description": "【直播】直播查询命令",
+    "hint": "新手保持“直播查询”。命令示例：直播查询 21452505 或 直播查询 https://live.bilibili.com/21452505；留空关闭该命令。",
+    "default": "直播查询"
+  },
+  "enable_live_monitor": {
+    "type": "bool",
+    "description": "【直播】开启开播提醒",
+    "hint": "默认关闭。开启后可使用“开播提醒 订阅 房间号”订阅直播间，主播开播时自动通知所在会话；订阅保存在本地，重启不丢失。",
+    "default": false
+  },
+  "live_monitor_keyword": {
+    "type": "string",
+    "description": "【直播】开播提醒命令",
+    "hint": "新手保持“开播提醒”。命令示例：开播提醒 订阅 21452505、开播提醒 列表、开播提醒 取消 21452505、开播提醒 取消全部；留空关闭该命令。",
+    "default": "开播提醒"
+  },
+  "live_monitor_interval_seconds": {
+    "type": "int",
+    "description": "【直播/高级】开播轮询间隔（秒）",
+    "hint": "推荐 60，可填 30-600。间隔越短提醒越及时，但对 B 站接口的请求越频繁；修改后需要重载插件。",
+    "default": 60
+  },
   "yaohud_api_key": {
     "type": "string",
     "description": "【下载/语音转写】妖狐 API Key",
@@ -230,6 +260,18 @@
     "description": "【视频下载/高级】下载超时（秒）",
     "hint": "推荐 180。网络较慢时可调大，避免任务过早失败。",
     "default": 180
+  },
+  "enable_audio_download": {
+    "type": "bool",
+    "description": "【音频下载】开启关键词下载",
+    "hint": "默认关闭。开启后解析音频卡片会提示编号，可发送“音频下载 编号”获取音频文件；直链来自 B 站音频接口，不需要妖狐 API Key，与视频下载共用冷却、每日上限等限制。",
+    "default": false
+  },
+  "audio_download_keyword": {
+    "type": "string",
+    "description": "【音频下载】下载命令前缀",
+    "hint": "新手保持“音频下载”。最终命令示例：音频下载 482731；必须完整照抄卡片提示。",
+    "default": "音频下载"
   },
   "yaohud_output": {
     "type": "string",

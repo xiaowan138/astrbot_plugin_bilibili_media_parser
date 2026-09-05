@@ -6,7 +6,14 @@ import io
 from datetime import datetime
 from typing import Any, Mapping
 
-from .models import ArticleInfo, AudioInfo, DynamicInfo, LiveInfo, VideoInfo
+from .models import (
+    ArticleInfo,
+    AudioInfo,
+    BangumiInfo,
+    DynamicInfo,
+    LiveInfo,
+    VideoInfo,
+)
 
 
 def format_count(value: int) -> str:
@@ -213,8 +220,10 @@ def _content_card_context(
     content_id: str,
     canonical_url: str,
     qr_src: str,
+    ai_summary: str = "",
+    summary_source: str = "",
 ) -> dict[str, Any]:
-    """Shared context builder for article/live/dynamic cards."""
+    """Shared context builder for article/live/dynamic/bangumi cards."""
     return {
         "brand_sub": _escape(brand_sub),
         "content_type": _escape(content_type),
@@ -229,6 +238,8 @@ def _content_card_context(
         "cover_src": _escape(cover_src),
         "body_title": _escape(body_title),
         "body_text": _escape(body_text),
+        "ai_summary": _escape(_truncate(ai_summary, 700)),
+        "summary_source": _escape(summary_source),
         "tags": [_escape(tag) for tag in tags if tag],
         "stats": [
             {"label": _escape(label), "value": format_count(value)}
@@ -280,6 +291,49 @@ def build_article_card_context(
         ],
         content_id=f"cv{article.article_id}",
         canonical_url=article.canonical_url,
+        qr_src=qr_src,
+        ai_summary=article.ai_summary,
+        summary_source=article.summary_source,
+    )
+
+
+def build_bangumi_card_context(
+    bangumi: BangumiInfo,
+    *,
+    cover_src: str = "",
+    avatar_src: str = "",
+    qr_src: str = "",
+) -> dict[str, Any]:
+    meta_items: list[tuple[str, str]] = [
+        ("地区", " / ".join(bangumi.area_names) or "未知"),
+        ("集数", f"{bangumi.total_episodes} 集"),
+    ]
+    if bangumi.new_ep_desc:
+        meta_items.append(("进度", bangumi.new_ep_desc))
+    if bangumi.ep_title:
+        meta_items.append(("本集", _truncate(bangumi.ep_title, 24)))
+    evaluate = _truncate(bangumi.evaluate, 520) or "暂无剧集简介。"
+    return _content_card_context(
+        brand_sub="B站番剧解析",
+        content_type="番剧",
+        title=bangumi.title,
+        author_name=bangumi.owner_name,
+        author_meta=f"UID {bangumi.owner_mid}" if bangumi.owner_mid else "哔哩哔哩",
+        avatar_src=avatar_src,
+        meta_items=meta_items,
+        cover_src=cover_src,
+        body_title="剧集简介",
+        body_text=evaluate,
+        tags=list(bangumi.area_names),
+        stats=[
+            ("播放", bangumi.view),
+            ("追番", bangumi.favorite),
+            ("弹幕", bangumi.danmaku),
+            ("评论", bangumi.reply),
+            ("投币", bangumi.coin),
+        ],
+        content_id=bangumi.canonical_id,
+        canonical_url=bangumi.canonical_url,
         qr_src=qr_src,
     )
 
@@ -353,6 +407,8 @@ def build_dynamic_card_context(
         content_id=f"opus{dynamic.dyn_id}",
         canonical_url=dynamic.canonical_url,
         qr_src=qr_src,
+        ai_summary=dynamic.ai_summary,
+        summary_source=dynamic.summary_source,
     )
 
 
@@ -368,6 +424,10 @@ def build_article_text_fallback(article: ArticleInfo) -> str:
     ]
     if article.summary:
         lines.extend(["摘要：", _truncate(article.summary, 360)])
+    if article.ai_summary:
+        lines.extend(
+            [f"AI概要（{article.summary_source}）：", _truncate(article.ai_summary, 700)]
+        )
     return "\n".join(lines)
 
 
@@ -397,4 +457,32 @@ def build_dynamic_text_fallback(dynamic: DynamicInfo) -> str:
             f"转发 {format_count(dynamic.forward_count)}"
         ),
     ]
+    if dynamic.ai_summary:
+        lines.extend(
+            [
+                f"AI概要（{dynamic.summary_source}）：",
+                _truncate(dynamic.ai_summary, 700),
+            ]
+        )
+    return "\n".join(lines)
+
+
+def build_bangumi_text_fallback(bangumi: BangumiInfo) -> str:
+    lines = [
+        f"【B站番剧】{bangumi.title}",
+        (
+            f"地区：{' / '.join(bangumi.area_names) or '未知'}  |  "
+            f"集数：{bangumi.total_episodes}"
+        ),
+    ]
+    if bangumi.ep_title:
+        lines.append(f"本集：{bangumi.ep_title}")
+    if bangumi.new_ep_desc:
+        lines.append(f"进度：{bangumi.new_ep_desc}")
+    lines.append(
+        f"播放 {format_count(bangumi.view)}  追番 {format_count(bangumi.favorite)}"
+    )
+    if bangumi.evaluate:
+        lines.extend(["简介：", _truncate(bangumi.evaluate, 360)])
+    lines.append(bangumi.canonical_url)
     return "\n".join(lines)

@@ -19,6 +19,7 @@ from .extractor import VideoReference, extract_video_reference
 from .models import (
     ArticleInfo,
     AudioInfo,
+    BangumiInfo,
     CommentReply,
     DynamicInfo,
     FeaturedComment,
@@ -26,6 +27,7 @@ from .models import (
     VideoInfo,
     article_from_api_data,
     audio_from_api_data,
+    bangumi_from_api_data,
     dynamic_from_page_state,
     live_from_api_data,
     video_from_view_data,
@@ -42,6 +44,11 @@ _IMAGE_HOST_SUFFIXES = (".hdslb.com", ".bilibili.com")
 _SUBTITLE_HOST_SUFFIXES = (".hdslb.com", ".bilibili.com")
 
 logger = logging.getLogger(__name__)
+
+# 引用类型全集：短链重定向后可能落在任何一种内容上，都必须接受。
+_TYPED_KINDS = frozenset(
+    {"bvid", "aid", "auid", "article", "live", "dynamic", "ep", "ss"}
+)
 
 
 class BilibiliApiError(RuntimeError):
@@ -67,6 +74,10 @@ class ResolvedVideo:
             return f"live{self.value}"
         if self.kind == "dynamic":
             return f"opus{self.value}"
+        if self.kind == "ep":
+            return f"ep{self.value}"
+        if self.kind == "ss":
+            return f"ss{self.value}"
         return self.value
 
 
@@ -135,6 +146,23 @@ def _extract_initial_state(body: str) -> dict[str, Any] | None:
     return None
 
 
+def audio_play_urls_from_payload(payload: Any) -> list[str]:
+    """Pull ordered CDN URLs out of the music-service /web/url response."""
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    cdns = data.get("cdns")
+    if not isinstance(cdns, list):
+        return []
+    return [
+        str(url).strip()
+        for url in cdns
+        if str(url or "").strip()
+    ]
+
+
 def _embedded_reference(body: str) -> VideoReference | None:
     """Prefer structured page metadata over scanning the whole HTML.
 
@@ -143,7 +171,7 @@ def _embedded_reference(body: str) -> VideoReference | None:
     """
     for meta_url in _extract_meta_urls(body, ("og:video", "og:url")):
         direct = extract_video_reference(meta_url)
-        if direct and direct.kind in {"bvid", "aid"}:
+        if direct and direct.kind in _TYPED_KINDS:
             return direct
     initial_state = _extract_initial_state(body)
     if isinstance(initial_state, dict):
@@ -188,14 +216,14 @@ class BilibiliApiClient:
             await self._session.close()
 
     async def resolve_reference(self, reference: VideoReference) -> ResolvedVideo:
-        if reference.kind in {"bvid", "aid", "auid", "article", "live", "dynamic"}:
+        if reference.kind in _TYPED_KINDS:
             return ResolvedVideo(reference.kind, reference.value)
 
         current = reference.value
         for _ in range(6):
             self._validate_bilibili_url(current)
             direct = extract_video_reference(current)
-            if direct and direct.kind in {"bvid", "aid", "auid"}:
+            if direct and direct.kind in _TYPED_KINDS:
                 return ResolvedVideo(direct.kind, direct.value)
 
             session = await self._get_session()
@@ -222,11 +250,11 @@ class BilibiliApiClient:
             embedded = _embedded_reference(body)
             if embedded is None:
                 embedded = extract_video_reference(body)
-            if embedded and embedded.kind in {"bvid", "aid", "auid"}:
+            if embedded and embedded.kind in _TYPED_KINDS:
                 return ResolvedVideo(embedded.kind, embedded.value)
             break
 
-        raise BilibiliApiError("没有从链接中找到有效的 BV/AV/AU 号")
+        raise BilibiliApiError("没有从链接中找到有效的 B 站内容编号")
 
     async def fetch_video_info(self, resolved: ResolvedVideo) -> VideoInfo:
         params = {"bvid": resolved.value} if resolved.kind == "bvid" else {"aid": resolved.value}
@@ -302,17 +330,19 @@ class BilibiliApiClient:
             info = live_from_api_data(payload)
         except ValueError as exc:
             raise BilibiliApiError(str(exc)) from exc
-        # The room-info API does not include the anchor name. When it is
-        # missing, resolve it once from the user card by mid.
-        if not info.owner_name and info.owner_mid:
+        # The room-info API does not include the anchor name or avatar. When
+        # they are missing, resolve both once from the user card by mid.
+        if (not info.owner_name or not info.owner_face_url) and info.owner_mid:
             try:
                 card = await self._get_api_json(
                     "/x/web-interface/card", {"mid": info.owner_mid}
                 )
                 card_data = card.get("card") if isinstance(card.get("card"), dict) else {}
                 name = str(card_data.get("name") or "").strip()
-                if name:
-                    info = replace(info, owner_name=name)
+                face = str(card_data.get("face") or "").strip()
+                if name or face:
+                    info = replace(info, owner_name=name or info.owner_name,
+                                   owner_face_url=face or info.owner_face_url)
             except BilibiliApiError:
                 pass
         return info
@@ -336,6 +366,78 @@ class BilibiliApiClient:
             return dynamic_from_page_state(state)
         except ValueError as exc:
             raise BilibiliApiError(str(exc)) from exc
+
+    async def fetch_bangumi_info(self, resolved: ResolvedVideo) -> BangumiInfo:
+        """Fetch bangumi/season metadata via the pgc season API."""
+        if resolved.kind not in {"ep", "ss"}:
+            raise BilibiliApiError(
+                f"内部错误：fetch_bangumi_info 期望 ep/ss 类型，实际为 {resolved.kind}"
+            )
+        try:
+            numeric_id = int(resolved.value)
+        except (ValueError, TypeError) as exc:
+            raise BilibiliApiError(f"番剧编号格式无效：{resolved.value}") from exc
+
+        params = (
+            {"ep_id": numeric_id}
+            if resolved.kind == "ep"
+            else {"season_id": numeric_id}
+        )
+        # pgc 接口的成功载荷放在 result 字段而不是 data 字段。
+        payload = await self._get_pgc_json("/pgc/view/web/season", params)
+        try:
+            return bangumi_from_api_data(
+                payload, ep_id=numeric_id if resolved.kind == "ep" else 0
+            )
+        except ValueError as exc:
+            raise BilibiliApiError(str(exc)) from exc
+
+    async def fetch_audio_play_url(self, au_id: int, *, quality: int = 1) -> str:
+        """Resolve one trusted audio stream URL for an AU id (no login required)."""
+        payload = await self._get_json_url(
+            AUDIO_API_BASE + "/audio/music-service-c/web/url",
+            params={"sid": au_id, "cdnNum": 3, "quality": quality},
+        )
+        code = payload.get("code")
+        if code != 0:
+            message = str(payload.get("msg") or payload.get("message") or "未知错误")
+            raise BilibiliApiError(f"B 站音频接口错误 {code}：{message}")
+        for candidate in audio_play_urls_from_payload(payload):
+            if is_allowed_media_url(candidate):
+                return candidate
+        raise BilibiliApiError("B 站接口没有返回可用的音频直链")
+
+    async def fetch_live_status(self, room_id: int) -> tuple[int, str]:
+        """Return (live_status, title) for one room; used by the live monitor."""
+        data = await self._get_json_url(
+            LIVE_API_BASE + "/room/v1/Room/get_info",
+            params={"room_id": room_id},
+        )
+        code = data.get("code")
+        if code != 0:
+            message = str(data.get("message") or data.get("msg") or "未知错误")
+            raise BilibiliApiError(f"B 站接口错误 {code}：{message}")
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        live_status = self._as_int(payload.get("live_status"))
+        title = str(payload.get("title") or "").strip()
+        return live_status, title
+
+    async def _get_pgc_json(
+        self,
+        path: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        data = await self._get_json_url(
+            API_BASE + path, params=params, include_bilibili_cookie=True
+        )
+        code = data.get("code")
+        if code != 0:
+            message = str(data.get("message") or "未知错误")
+            raise BilibiliApiError(f"B 站接口错误 {code}：{message}")
+        payload = data.get("result")
+        if not isinstance(payload, dict):
+            raise BilibiliApiError("B 站接口缺少 result 字段")
+        return payload
 
     async def _get_page_text(self, url: str) -> str:
         """Fetch a Bilibili page body as text (for server-rendered data)."""
@@ -607,7 +709,7 @@ class BilibiliApiClient:
             f"妖狐接口未返回视频直链（响应字段：{fields}）"
         )
 
-    async def download_direct_video(
+    async def download_media(
         self,
         url: str,
         destination: Path,
@@ -615,10 +717,14 @@ class BilibiliApiClient:
         max_bytes: int,
         timeout_seconds: int,
         cancel_event: asyncio.Event | None = None,
-    ) -> None:
-        """Stream one trusted temporary media URL to a temporary local file."""
+    ) -> str:
+        """Stream one trusted temporary media URL to a local file.
+
+        Returns the response Content-Type so callers can pick a file
+        extension. Video and audio downloads share this implementation.
+        """
         if max_bytes <= 0 or not is_allowed_media_url(url):
-            raise BilibiliApiError("视频直链无效或不受信任")
+            raise BilibiliApiError("媒体直链无效或不受信任")
 
         timeout = aiohttp.ClientTimeout(
             total=max(float(timeout_seconds), 10.0),
@@ -629,56 +735,77 @@ class BilibiliApiClient:
         current_url = url
         for _ in range(4):
             if cancel_event and cancel_event.is_set():
-                raise BilibiliApiError("视频下载已取消")
+                raise BilibiliApiError("媒体下载已取消")
             try:
                 response = await session.get(
                     current_url,
                     allow_redirects=False,
                     timeout=timeout,
-                    headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
+                    headers={
+                        "Accept": "video/mp4,audio/mp4,audio/mpeg,*/*;q=0.5"
+                    },
                 )
             except asyncio.TimeoutError as exc:
-                raise BilibiliApiError("视频下载超时") from exc
+                raise BilibiliApiError("媒体下载超时") from exc
             except aiohttp.ClientError as exc:
-                raise BilibiliApiError(f"视频下载请求失败：{exc}") from exc
+                raise BilibiliApiError(f"媒体下载请求失败：{exc}") from exc
 
             async with response:
                 if response.status in {301, 302, 303, 307, 308}:
                     location = response.headers.get("Location")
                     if not location:
-                        raise BilibiliApiError("视频下载跳转地址缺失")
+                        raise BilibiliApiError("媒体下载跳转地址缺失")
                     current_url = urljoin(current_url, location)
                     if not is_allowed_media_url(current_url):
-                        raise BilibiliApiError("视频下载跳转到了不受信任的地址")
+                        raise BilibiliApiError("媒体下载跳转到了不受信任的地址")
                     continue
                 if response.status >= 400:
-                    raise BilibiliApiError(f"视频下载失败（HTTP {response.status}）")
+                    raise BilibiliApiError(f"媒体下载失败（HTTP {response.status}）")
                 declared_size = int(response.headers.get("Content-Length") or 0)
                 if declared_size > max_bytes:
-                    raise BilibiliApiError("视频文件超过后台设定的大小上限")
+                    raise BilibiliApiError("媒体文件超过后台设定的大小上限")
                 content_type = response.headers.get("Content-Type", "").lower()
                 if content_type and not (
                     content_type.startswith("video/")
+                    or content_type.startswith("audio/")
                     or content_type.startswith("application/octet-stream")
                 ):
-                    raise BilibiliApiError("视频直链没有返回视频文件")
+                    raise BilibiliApiError("媒体直链没有返回媒体文件")
 
                 received = 0
                 with destination.open("wb") as output:
                     while True:
                         if cancel_event and cancel_event.is_set():
-                            raise BilibiliApiError("视频下载已取消")
+                            raise BilibiliApiError("媒体下载已取消")
                         chunk = await response.content.read(256 * 1024)
                         if not chunk:
                             break
                         received += len(chunk)
                         if received > max_bytes:
-                            raise BilibiliApiError("视频文件超过后台设定的大小上限")
+                            raise BilibiliApiError("媒体文件超过后台设定的大小上限")
                         output.write(chunk)
                 if received <= 0:
-                    raise BilibiliApiError("视频文件为空")
-                return
-        raise BilibiliApiError("视频下载跳转次数过多")
+                    raise BilibiliApiError("媒体文件为空")
+                return content_type or ""
+        raise BilibiliApiError("媒体下载跳转次数过多")
+
+    async def download_direct_video(
+        self,
+        url: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+        timeout_seconds: int,
+        cancel_event: asyncio.Event | None = None,
+    ) -> None:
+        """Backward-compatible wrapper around download_media for video URLs."""
+        await self.download_media(
+            url,
+            destination,
+            max_bytes=max_bytes,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+        )
 
     async def _get_api_json(
         self,

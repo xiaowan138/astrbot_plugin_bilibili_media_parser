@@ -1,10 +1,14 @@
+import asyncio
 import unittest
 
 from bilibili_parser.api_client import (
+    BilibiliApiClient,
     _embedded_reference,
     _extract_initial_state,
     _extract_meta_urls,
+    audio_play_urls_from_payload,
 )
+from bilibili_parser.extractor import VideoReference
 
 
 class EmbeddedReferenceTests(unittest.TestCase):
@@ -67,6 +71,75 @@ class EmbeddedReferenceTests(unittest.TestCase):
 
     def test_embedded_reference_returns_none_when_unrelated(self):
         self.assertIsNone(_embedded_reference("<html>no video here</html>"))
+
+    def test_embedded_reference_accepts_live_og_url(self):
+        # A live landing page announces itself via og:url; the old filter
+        # only accepted bvid/aid and fell through to a whole-page BV scan.
+        body = (
+            '<meta property="og:url" content="https://live.bilibili.com/12345">'
+            '<a href="https://www.bilibili.com/video/BV1zz0000000">相关推荐</a>'
+        )
+        reference = _embedded_reference(body)
+        self.assertIsNotNone(reference)
+        self.assertEqual((reference.kind, reference.value), ("live", "12345"))
+
+
+class _FakeResponse:
+    def __init__(self, status, headers=None):
+        self.status = status
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeRedirectSession:
+    """Responds to every GET with a 302 to the configured location."""
+
+    closed = False
+
+    def __init__(self, location):
+        self.location = location
+        self.requested = []
+
+    def get(self, url, **kwargs):
+        self.requested.append(url)
+        return _FakeResponse(302, {"Location": self.location})
+
+
+class ResolveReferenceRedirectTests(unittest.TestCase):
+    def _resolve(self, location):
+        client = BilibiliApiClient()
+        client._session = _FakeRedirectSession(location)
+        reference = VideoReference("url", "https://b23.tv/AbCd12")
+        return asyncio.run(client.resolve_reference(reference))
+
+    def test_short_link_to_live_room_resolves_to_live_kind(self):
+        resolved = self._resolve("https://live.bilibili.com/12345?share_medium=qq")
+        self.assertEqual((resolved.kind, resolved.value), ("live", "12345"))
+
+    def test_short_link_to_dynamic_resolves_to_dynamic_kind(self):
+        resolved = self._resolve(
+            "https://www.bilibili.com/opus/967717348014293017?x=1"
+        )
+        self.assertEqual(
+            (resolved.kind, resolved.value), ("dynamic", "967717348014293017")
+        )
+
+    def test_short_link_to_article_resolves_to_article_kind(self):
+        resolved = self._resolve("https://www.bilibili.com/read/cv300010")
+        self.assertEqual((resolved.kind, resolved.value), ("article", "300010"))
+
+    def test_short_link_to_audio_resolves_to_auid_kind(self):
+        resolved = self._resolve(
+            "https://www.bilibili.com/audio/au10004684671"
+        )
+        self.assertEqual(
+            (resolved.kind, resolved.value), ("auid", "10004684671")
+        )
 
 
 if __name__ == "__main__":

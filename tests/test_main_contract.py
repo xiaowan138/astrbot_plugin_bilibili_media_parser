@@ -59,7 +59,7 @@ class MainHandlerContractTests(unittest.TestCase):
         self.assertIn("Comp.Video.fromBase64(video_base64)", source)
         self.assertNotIn('Comp.Plain(f"B站视频源链接：\\n{video.canonical_url}")', source)
         self.assertIn("tempfile.mkdtemp", source)
-        self.assertIn("base64.b64encode(video_file.read()).decode", source)
+        self.assertIn("base64.b64encode(media_file.read()).decode", source)
         self.assertIn("shutil.rmtree(download_dir, ignore_errors=True)", source)
         self.assertIn("hide_download_hint_when_unavailable", source)
         self.assertIn("_download_is_ready(event, video)", source)
@@ -75,11 +75,55 @@ class MainHandlerContractTests(unittest.TestCase):
         # The handler must not stop propagation for ordinary messages, otherwise
         # other plugins and the main agent would never see them.
         self.assertIn("handled = False", source)
-        self.assertIn("if reference is None:\n                return\n            handled = True", source)
+        self.assertIn("if not references:\n                return\n            handled = True", source)
         self.assertIn("if handled:", source)
         self.assertLess(
             source.index("if handled:"), source.index("event.stop_event()")
         )
+
+    def test_multi_link_dispatch_is_bounded(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("extract_video_references(", source)
+        self.assertIn('"max_links_per_message", 3, 1, 5', source)
+        self.assertIn("for reference in references[:limit]:", source)
+
+    def test_live_monitor_and_query_commands_exist(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("_parse_live_query_command", source)
+        self.assertIn("_parse_live_monitor_command", source)
+        self.assertIn("_handle_live_monitor_command", source)
+        self.assertIn("_ensure_live_monitor_started", source)
+        self.assertIn('"enable_live_monitor", False', source)
+        self.assertIn('"live_monitor_interval_seconds", 60, 30, 600', source)
+        self.assertIn("should_notify_live_start", source)
+        self.assertIn("LiveSubscriptionStore", source)
+        # 订阅必须持久化，重启后仍生效。
+        self.assertIn("StarTools.get_data_dir", source)
+        self.assertIn("live_subscriptions.json", source)
+        # 终止时要停掉监控任务。
+        self.assertIn("self._live_monitor_task.cancel()", source)
+
+    def test_audio_download_shares_the_download_state_machine(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("_audio_download_keyword", source)
+        self.assertIn('"enable_audio_download", False', source)
+        self.assertIn("_remember_audio_download", source)
+        self.assertIn("_handle_audio_download", source)
+        self.assertIn("fetch_audio_play_url", source)
+        self.assertIn("Comp.Record.fromBase64(audio_base64)", source)
+        # 音频下载不需要妖狐 Key，但复用权限/冷却/每日上限等限制。
+        self.assertIn("_audio_download_request_allowed", source)
+        self.assertIn('"audio_download_keyword", "音频下载"', source)
+
+    def test_content_ai_summary_uses_shared_llm_helper(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("_with_content_ai_summary", source)
+        self.assertIn("_request_ai_summary", source)
+        self.assertIn('ai_summary=summary, summary_source=source', source)
 
     def test_download_quota_is_consumed_only_after_validation(self):
         source_path = Path(__file__).parents[1] / "main.py"

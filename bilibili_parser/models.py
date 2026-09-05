@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +15,15 @@ def _as_int(value: Any) -> int:
 
 def _as_str(value: Any) -> str:
     return str(value or "").strip()
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(value: Any) -> str:
+    """Convert an HTML fragment into readable plain text."""
+    text = html.unescape(_HTML_TAG_RE.sub(" ", str(value or "")))
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
 @dataclass(slots=True)
@@ -124,6 +135,9 @@ class ArticleInfo:
     words: int
     stats: ArticleStats = field(default_factory=ArticleStats)
     tags: list[str] = field(default_factory=list)
+    content: str = ""
+    ai_summary: str = ""
+    summary_source: str = ""
 
     @property
     def canonical_url(self) -> str:
@@ -169,6 +183,7 @@ def article_from_api_data(data: dict[str, Any]) -> ArticleInfo:
             share=_as_int(stats.get("share")),
         ),
         tags=[_as_str(tag.get("name")) for tag in tags if isinstance(tag, dict)],
+        content=_strip_html(data.get("content")),
     )
 
 
@@ -186,6 +201,7 @@ class LiveInfo:
     description: str
     tags: str
     short_id: int = 0
+    owner_face_url: str = ""
 
     @property
     def canonical_url(self) -> str:
@@ -218,6 +234,99 @@ def live_from_api_data(data: dict[str, Any]) -> LiveInfo:
         description=_as_str(data.get("description")),
         tags=_as_str(data.get("tags")),
         short_id=_as_int(data.get("short_id")),
+        owner_face_url=_as_str(data.get("face")),
+    )
+
+
+@dataclass(slots=True)
+class BangumiInfo:
+    season_id: int
+    ep_id: int
+    title: str
+    ep_title: str
+    new_ep_desc: str
+    evaluate: str
+    cover_url: str
+    owner_name: str
+    owner_mid: int
+    owner_face_url: str
+    total_episodes: int
+    area_names: list[str] = field(default_factory=list)
+    view: int = 0
+    danmaku: int = 0
+    favorite: int = 0
+    reply: int = 0
+    coin: int = 0
+
+    @property
+    def canonical_url(self) -> str:
+        if self.ep_id:
+            return f"https://www.bilibili.com/bangumi/play/ep{self.ep_id}"
+        return f"https://www.bilibili.com/bangumi/play/ss{self.season_id}"
+
+    @property
+    def canonical_id(self) -> str:
+        if self.ep_id:
+            return f"ep{self.ep_id}"
+        return f"ss{self.season_id}"
+
+
+def bangumi_from_api_data(data: dict[str, Any], *, ep_id: int = 0) -> BangumiInfo:
+    """Convert the pgc season payload into a stable internal model."""
+    if not isinstance(data, dict):
+        raise ValueError("番剧数据格式无效")
+
+    season_id = _as_int(data.get("season_id"))
+    title = _as_str(data.get("title"))
+    if not season_id or not title:
+        raise ValueError("番剧数据缺少 season_id 或标题")
+
+    episodes = (
+        data.get("episodes") if isinstance(data.get("episodes"), list) else []
+    )
+    ep_title = ""
+    if ep_id:
+        for episode in episodes:
+            if isinstance(episode, dict) and _as_int(episode.get("ep_id")) == ep_id:
+                ep_title = " ".join(
+                    part
+                    for part in (
+                        _as_str(episode.get("title")),
+                        _as_str(episode.get("long_title")),
+                    )
+                    if part
+                )
+                break
+
+    up_info = data.get("up_info") if isinstance(data.get("up_info"), dict) else {}
+    stat = data.get("stat") if isinstance(data.get("stat"), dict) else {}
+    areas = data.get("areas") if isinstance(data.get("areas"), list) else []
+    new_ep = data.get("new_ep") if isinstance(data.get("new_ep"), dict) else {}
+    return BangumiInfo(
+        season_id=season_id,
+        ep_id=ep_id,
+        title=title,
+        ep_title=ep_title,
+        new_ep_desc=_as_str(new_ep.get("desc")),
+        evaluate=_as_str(data.get("evaluate")),
+        cover_url=_as_str(data.get("cover")),
+        owner_name=_as_str(up_info.get("uname")) or "哔哩哔哩",
+        owner_mid=_as_int(up_info.get("mid")),
+        owner_face_url=_as_str(up_info.get("face")),
+        total_episodes=max(
+            _as_int(data.get("total")),
+            len(episodes),
+        ),
+        area_names=[
+            _as_str(area.get("name"))
+            for area in areas
+            if isinstance(area, dict) and area.get("name")
+        ],
+        view=_as_int(stat.get("views")),
+        danmaku=_as_int(stat.get("danmakus")),
+        favorite=_as_int(stat.get("favorite")),
+        reply=_as_int(stat.get("reply")),
+        coin=_as_int(stat.get("coins")),
     )
 
 
@@ -234,6 +343,8 @@ class DynamicInfo:
     comment_count: int = 0
     forward_count: int = 0
     favorite_count: int = 0
+    ai_summary: str = ""
+    summary_source: str = ""
 
     @property
     def canonical_url(self) -> str:

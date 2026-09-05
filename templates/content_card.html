@@ -220,6 +220,13 @@
       </section>
       {% endif %}
 
+      {% if ai_summary %}
+      <section class="section">
+        <div class="section-title">AI 概要{% if summary_source %}（{{ summary_source | safe }}）{% endif %}</div>
+        <div class="copy">{{ ai_summary | safe }}</div>
+      </section>
+      {% endif %}
+
       {% if tags %}
       <section class="section">
         <div class="section-title">标签</div>
