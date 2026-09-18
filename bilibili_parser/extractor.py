@@ -16,7 +16,8 @@ _BVID_RE = re.compile(r"(?<![0-9A-Za-z])BV[0-9A-Za-z]{10}(?![0-9A-Za-z])", re.I)
 _AID_RE = re.compile(r"(?<![0-9A-Za-z])av(\d{1,20})(?!\d)", re.I)
 _AUID_RE = re.compile(r"(?<![0-9A-Za-z])au(\d{1,20})(?!\d)", re.I)
 _BILI_URI_RE = re.compile(
-    r"bilibili://(video|live|opus|article)/(BV[0-9A-Za-z]{10}|cv\d{1,20}|\d{1,20})",
+    r"bilibili://(video|live|opus|article|audio)/"
+    r"(BV[0-9A-Za-z]{10}|cv\d{1,20}|au\d{1,20}|\d{1,20})",
     re.I,
 )
 _URL_RE = re.compile(
@@ -127,6 +128,10 @@ def _reference_from_uri(scheme: str, value: str, source: str) -> VideoReference:
         return VideoReference("live", value, source)
     if scheme == "opus":
         return VideoReference("dynamic", value, source)
+    if scheme == "audio":
+        if value.lower().startswith("au"):
+            return VideoReference("auid", value[2:], source)
+        return VideoReference("auid", value, source)
     if value.lower().startswith("cv"):
         return VideoReference("article", value[2:], source)
     if value.lower().startswith("bv"):

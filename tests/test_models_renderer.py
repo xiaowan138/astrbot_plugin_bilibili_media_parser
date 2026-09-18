@@ -250,6 +250,7 @@ class ModelsAndRendererTests(unittest.TestCase):
         self.assertEqual(bangumi.ep_id, 836366)
         self.assertEqual(bangumi.ep_title, "1 第一集")
         self.assertEqual(bangumi.total_episodes, 12)
+        self.assertEqual(bangumi.episode_names, ["1 第一集", "2 第二集"])
         self.assertEqual(bangumi.area_names, ["日本"])
         self.assertEqual(bangumi.new_ep_desc, "已完结, 全12话")
         self.assertEqual(bangumi.view, 12000000)
@@ -308,6 +309,76 @@ class ModelsAndRendererTests(unittest.TestCase):
         self.assertIn("地区：日本", text)
         self.assertIn("集数：12", text)
         self.assertIn("https://www.bilibili.com/bangumi/play/ep836366", text)
+
+    def test_bangumi_episode_list_keeps_only_the_last_eight(self):
+        episodes = [
+            {"ep_id": 100 + index, "title": str(index + 1), "long_title": f"第{index + 1}集"}
+            for index in range(12)
+        ]
+        bangumi = bangumi_from_api_data(
+            {"season_id": 42202, "title": "长番剧", "total": 12, "episodes": episodes},
+            ep_id=100,
+        )
+        self.assertEqual(len(bangumi.episode_names), 8)
+        self.assertEqual(bangumi.episode_names[0], "5 第5集")
+        self.assertEqual(bangumi.episode_names[-1], "12 第12集")
+
+    def test_bangumi_card_context_includes_episode_section(self):
+        bangumi = bangumi_from_api_data(
+            {
+                "season_id": 42202,
+                "title": "测试番剧",
+                "episodes": [
+                    {"ep_id": 836366, "title": "1", "long_title": "第一集"},
+                    {"ep_id": 836367, "title": "2", "long_title": "第二集"},
+                ],
+            },
+            ep_id=836366,
+        )
+        context = build_bangumi_card_context(bangumi)
+        self.assertEqual(
+            context["extra_sections"],
+            [{"title": "剧集列表", "text": "1 第一集\n2 第二集"}],
+        )
+
+    def test_dynamic_card_context_includes_gallery(self):
+        state = {
+            "id": "967717348014293017",
+            "detail": {
+                "modules": [
+                    {
+                        "module_type": "MODULE_TYPE_AUTHOR",
+                        "module_author": {"name": "动态作者", "mid": 1, "pub_ts": 1724152653},
+                    },
+                    {
+                        "module_type": "MODULE_TYPE_CONTENT",
+                        "module_content": {
+                            "paragraphs": [
+                                {
+                                    "text": {
+                                        "nodes": [
+                                            {"type": "TEXT_NODE_TYPE_WORD", "word": {"words": "多图动态"}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                    },
+                ]
+            },
+        }
+        dynamic = dynamic_from_page_state(state)
+        context = build_dynamic_card_context(
+            dynamic,
+            gallery_srcs=["data:image/jpeg;base64,a", "data:image/jpeg;base64,b"],
+        )
+        self.assertEqual(
+            context["gallery_srcs"],
+            ["data:image/jpeg;base64,a", "data:image/jpeg;base64,b"],
+        )
+        empty_context = build_dynamic_card_context(dynamic)
+        self.assertEqual(empty_context["gallery_srcs"], [])
+        self.assertEqual(empty_context["extra_sections"], [])
 
     def test_article_card_context_includes_ai_summary(self):
         article = article_from_api_data(

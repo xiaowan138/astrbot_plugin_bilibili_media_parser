@@ -222,6 +222,8 @@ def _content_card_context(
     qr_src: str,
     ai_summary: str = "",
     summary_source: str = "",
+    gallery_srcs: list[str] | None = None,
+    extra_sections: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Shared context builder for article/live/dynamic/bangumi cards."""
     return {
@@ -236,6 +238,12 @@ def _content_card_context(
             for label, value in meta_items
         ],
         "cover_src": _escape(cover_src),
+        "gallery_srcs": [_escape(src) for src in (gallery_srcs or []) if src],
+        "extra_sections": [
+            {"title": _escape(title_text), "text": _escape(text)}
+            for title_text, text in (extra_sections or [])
+            if text
+        ],
         "body_title": _escape(body_title),
         "body_text": _escape(body_text),
         "ai_summary": _escape(_truncate(ai_summary, 700)),
@@ -313,6 +321,9 @@ def build_bangumi_card_context(
     if bangumi.ep_title:
         meta_items.append(("本集", _truncate(bangumi.ep_title, 24)))
     evaluate = _truncate(bangumi.evaluate, 520) or "暂无剧集简介。"
+    extra_sections: list[tuple[str, str]] = []
+    if bangumi.episode_names:
+        extra_sections.append(("剧集列表", "\n".join(bangumi.episode_names)))
     return _content_card_context(
         brand_sub="B站番剧解析",
         content_type="番剧",
@@ -335,6 +346,7 @@ def build_bangumi_card_context(
         content_id=bangumi.canonical_id,
         canonical_url=bangumi.canonical_url,
         qr_src=qr_src,
+        extra_sections=extra_sections,
     )
 
 
@@ -379,6 +391,7 @@ def build_dynamic_card_context(
     cover_src: str = "",
     avatar_src: str = "",
     qr_src: str = "",
+    gallery_srcs: list[str] | None = None,
 ) -> dict[str, Any]:
     published = (
         datetime.fromtimestamp(dynamic.publish_at).strftime("%Y-%m-%d %H:%M")
@@ -409,6 +422,7 @@ def build_dynamic_card_context(
         qr_src=qr_src,
         ai_summary=dynamic.ai_summary,
         summary_source=dynamic.summary_source,
+        gallery_srcs=gallery_srcs,
     )
 
 

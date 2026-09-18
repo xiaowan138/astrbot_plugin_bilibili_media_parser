@@ -25,14 +25,23 @@ from .bilibili_parser.api_client import (
     BilibiliApiError,
     ResolvedVideo,
 )
+from .bilibili_parser.commands import (
+    DownloadCommand,
+    is_download_cancel_command,
+    is_download_status_command,
+    live_room_id_from_target,
+    parse_download_command,
+    parse_live_monitor_command,
+    parse_live_query_command,
+)
 from .bilibili_parser.duplicate_guard import DuplicateGuard
 from .bilibili_parser.extractor import (
     VideoReference,
-    extract_video_reference,
     extract_video_references,
 )
 from .bilibili_parser.live_monitor import (
     LiveSubscriptionStore,
+    should_notify_live_end,
     should_notify_live_start,
 )
 from .bilibili_parser.models import (
@@ -71,13 +80,6 @@ class PendingDownload:
     media_type: str = "video"
     video: VideoInfo | None = None
     audio: AudioInfo | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DownloadCommand:
-    code: str
-    page: int = 1
-    media_type: str = "video"
 
 
 @dataclass(slots=True)
@@ -161,9 +163,16 @@ class BilibiliParserPlugin(Star):
                     yield result
                 return
 
-            live_room_id = self._parse_live_query_command(event.message_str)
-            if live_room_id is not None:
+            live_matched, live_room_id = self._parse_live_query_command(
+                event.message_str
+            )
+            if live_matched:
                 handled = True
+                if live_room_id is None:
+                    yield event.plain_result(
+                        f"用法：{self._live_query_keyword()} <房间号或直播间链接>"
+                    )
+                    return
                 async for result in self._handle_content_card(
                     event,
                     VideoReference("live", live_room_id),
@@ -234,8 +243,13 @@ class BilibiliParserPlugin(Star):
     # 直播查询与开播提醒
     # ------------------------------------------------------------------
 
+    def _live_monitor_enabled(self) -> bool:
+        return bool(self.config.get("enable_live_monitor", False)) or bool(
+            self.config.get("enable_live_end_notify", False)
+        )
+
     def _ensure_live_monitor_started(self) -> None:
-        if not bool(self.config.get("enable_live_monitor", False)):
+        if not self._live_monitor_enabled():
             return
         if self._live_monitor_task is not None and not self._live_monitor_task.done():
             return
@@ -271,6 +285,10 @@ class BilibiliParserPlugin(Star):
         # 先轮询一次记录基线状态：重启后已在播的直播间不会立刻触发提醒。
         await asyncio.sleep(interval)
         while True:
+            # 开关在后台被关闭后停止轮询；重新开启时会由消息入口重新启动任务。
+            if not self._live_monitor_enabled():
+                logger.info("B站直播监控：相关开关已关闭，停止轮询任务")
+                return
             try:
                 await self._poll_live_rooms_once()
             except asyncio.CancelledError:
@@ -286,8 +304,17 @@ class BilibiliParserPlugin(Star):
         rooms = store.rooms()
         if not rooms:
             return
+        notify_start = bool(self.config.get("enable_live_monitor", False))
+        notify_end = bool(self.config.get("enable_live_end_notify", False))
+        # 限制并发，避免订阅很多时对 B 站直播接口造成瞬时压力。
+        semaphore = asyncio.Semaphore(5)
+
+        async def fetch_status(room_id: int):
+            async with semaphore:
+                return await self._client.fetch_live_status(room_id)
+
         statuses = await asyncio.gather(
-            *(self._client.fetch_live_status(room) for room in rooms),
+            *(fetch_status(room) for room in rooms),
             return_exceptions=True,
         )
         for room, status in zip(rooms, statuses):
@@ -297,8 +324,10 @@ class BilibiliParserPlugin(Star):
                 continue
             live_status, title = status
             self._live_status_cache[room] = live_status
-            if should_notify_live_start(previous, live_status):
+            if notify_start and should_notify_live_start(previous, live_status):
                 await self._notify_live_start(store, room, title)
+            if notify_end and should_notify_live_end(previous, live_status):
+                await self._notify_live_end(store, room, title)
 
     async def _notify_live_start(
         self, store: LiveSubscriptionStore, room_id: int, title: str
@@ -307,6 +336,20 @@ class BilibiliParserPlugin(Star):
             f"你订阅的直播间开播啦！\n房间号：{room_id}\n标题：{title}\n"
             f"https://live.bilibili.com/{room_id}"
         )
+        await self._push_live_notice(store, room_id, message)
+
+    async def _notify_live_end(
+        self, store: LiveSubscriptionStore, room_id: int, title: str
+    ) -> None:
+        message = (
+            f"你订阅的直播间已下播。\n房间号：{room_id}\n标题：{title}\n"
+            f"https://live.bilibili.com/{room_id}"
+        )
+        await self._push_live_notice(store, room_id, message)
+
+    async def _push_live_notice(
+        self, store: LiveSubscriptionStore, room_id: int, message: str
+    ) -> None:
         for umo in store.umos_for(room_id):
             try:
                 await self.context.send_message(
@@ -317,7 +360,7 @@ class BilibiliParserPlugin(Star):
                 failures = self._live_notify_failures.get((room_id, umo), 0) + 1
                 self._live_notify_failures[(room_id, umo)] = failures
                 logger.warning(
-                    f"B站直播监控：向会话推送开播提醒失败（第 {failures} 次）：{umo}"
+                    f"B站直播监控：向会话推送直播提醒失败（第 {failures} 次）：{umo}"
                 )
                 if failures >= 3:
                     await self._remove_live_subscription(room_id, umo)
@@ -336,71 +379,44 @@ class BilibiliParserPlugin(Star):
     def _live_monitor_keyword(self) -> str:
         return str(self.config.get("live_monitor_keyword", "开播提醒") or "").strip()
 
+    def _live_query_keyword(self) -> str:
+        return str(self.config.get("live_query_keyword", "直播查询") or "").strip()
+
     @staticmethod
     def _live_room_id_from_target(target: str) -> int | None:
-        text = str(target or "").strip()
-        if text.isdigit():
-            return int(text)
-        reference = extract_video_reference(text)
-        if reference is not None and reference.kind == "live":
-            try:
-                return int(reference.value)
-            except ValueError:
-                return None
-        return None
+        return live_room_id_from_target(target)
 
-    def _parse_live_query_command(self, message: str) -> int | None:
-        keyword = str(self.config.get("live_query_keyword", "直播查询") or "").strip()
-        if not keyword:
-            return None
-        match = re.fullmatch(rf"{re.escape(keyword)}\s+(.+)", str(message or "").strip())
-        if not match:
-            return None
-        return self._live_room_id_from_target(match.group(1))
-
-    def _parse_live_monitor_command(self, message: str) -> tuple[str, int] | None:
-        """Parse “开播提醒 订阅/取消/列表/取消全部” style commands."""
-        keyword = self._live_monitor_keyword()
-        if not keyword:
-            return None
-        match = re.fullmatch(
-            rf"{re.escape(keyword)}(?:\s+(.+))?", str(message or "").strip()
+    def _parse_live_query_command(
+        self, message: str
+    ) -> tuple[bool, int | None]:
+        return parse_live_query_command(
+            str(message or "").strip(), self._live_query_keyword()
         )
-        if not match:
-            return None
-        rest = (match.group(1) or "").strip()
-        if not rest or rest in {"帮助", "help", "Help"}:
-            return ("help", 0)
-        if rest in {"列表", "查看"}:
-            return ("list", 0)
-        if rest in {"取消全部", "全部取消"}:
-            return ("clear", 0)
 
-        action, _, target = rest.partition(" ")
-        target = target.strip()
-        if action == "订阅" and target:
-            room_id = self._live_room_id_from_target(target)
-            if room_id is not None:
-                return ("subscribe", room_id)
-        if action == "取消" and target:
-            room_id = self._live_room_id_from_target(target)
-            if room_id is not None:
-                return ("unsubscribe", room_id)
-        return ("help", 0)
+    def _parse_live_monitor_command(
+        self, message: str
+    ) -> tuple[str, int | None] | None:
+        """Parse “开播提醒 订阅/取消/列表/取消全部” style commands."""
+        return parse_live_monitor_command(
+            str(message or "").strip(), self._live_monitor_keyword()
+        )
 
     async def _handle_live_monitor_command(
-        self, event: AstrMessageEvent, command: tuple[str, int]
+        self, event: AstrMessageEvent, command: tuple[str, int | None]
     ) -> AsyncGenerator:
         action, room_id = command
         keyword = self._live_monitor_keyword()
         if action == "help":
-            yield event.plain_result(
-                "开播提醒命令：\n"
-                f"{keyword} 订阅 <房间号或直播间链接> —— 订阅本会话的开播提醒\n"
-                f"{keyword} 取消 <房间号或直播间链接> —— 取消订阅\n"
-                f"{keyword} 取消全部 —— 取消本会话全部订阅\n"
-                f"{keyword} 列表 —— 查看本会话的订阅"
-            )
+            lines = [
+                "开播提醒命令：",
+                f"{keyword} 订阅 <房间号或直播间链接> —— 订阅本会话的开播提醒",
+                f"{keyword} 取消 <房间号或直播间链接> —— 取消订阅",
+                f"{keyword} 取消全部 —— 取消本会话全部订阅",
+                f"{keyword} 列表 —— 查看本会话的订阅",
+            ]
+            if bool(self.config.get("enable_live_end_notify", False)):
+                lines.append("下播提醒已开启：主播下播时也会通知本会话。")
+            yield event.plain_result("\n".join(lines))
             return
 
         umo = event.unified_msg_origin
@@ -423,6 +439,9 @@ class BilibiliParserPlugin(Star):
             for room, target in list(self._live_notify_failures):
                 if target == umo:
                     self._live_notify_failures.pop((room, target), None)
+            for room in list(self._live_status_cache):
+                if not store.umos_for(room):
+                    self._live_status_cache.pop(room, None)
             await self._save_live_store()
             if count:
                 yield event.plain_result(f"已取消本会话的 {count} 个开播提醒订阅。")
@@ -431,9 +450,9 @@ class BilibiliParserPlugin(Star):
             return
 
         if action == "subscribe":
-            if not bool(self.config.get("enable_live_monitor", False)):
+            if not self._live_monitor_enabled():
                 yield event.plain_result(
-                    "开播提醒功能未开启，请联系管理员在插件后台打开。"
+                    "开播/下播提醒功能未开启，请联系管理员在插件后台打开。"
                 )
                 return
             try:
@@ -456,9 +475,13 @@ class BilibiliParserPlugin(Star):
             status_label = {0: "未开播", 1: "直播中", 2: "轮播中"}.get(
                 info.live_status, "未知"
             )
+            if bool(self.config.get("enable_live_end_notify", False)):
+                feature, notify_desc = "开播/下播提醒", "开播和下播时都会自动通知本会话。"
+            else:
+                feature, notify_desc = "开播提醒", "开播后会自动通知本会话。"
             yield event.plain_result(
-                f"已订阅「{info.owner_name or info.title}」的开播提醒"
-                f"（房间号 {info.room_id}，当前{status_label}），开播后会自动通知本会话。"
+                f"已订阅「{info.owner_name or info.title}」的{feature}"
+                f"（房间号 {info.room_id}，当前{status_label}），{notify_desc}"
             )
             return
 
@@ -861,7 +884,11 @@ class BilibiliParserPlugin(Star):
         """Fetch article/live/dynamic info with a bounded TTL cache."""
         key = resolved.canonical_id
         now = time.monotonic()
-        ttl = self._config_int("video_cache_seconds", 300, 0, 86400)
+        if resolved.kind == "live":
+            # 直播状态变化很快，单独使用更短的缓存，避免查询到过期数据。
+            ttl = self._config_int("live_cache_seconds", 60, 0, 3600)
+        else:
+            ttl = self._config_int("video_cache_seconds", 300, 0, 86400)
 
         async with self._cache_lock:
             cached = self._content_cache.get(key)
@@ -901,7 +928,10 @@ class BilibiliParserPlugin(Star):
     async def _render_content_card(self, kind: str, info) -> str:
         cache_key = f"{kind}:{info.canonical_id}"
         now = time.monotonic()
-        card_ttl = self._config_int("card_cache_seconds", 300, 0, 3600)
+        if kind == "live":
+            card_ttl = self._config_int("live_cache_seconds", 60, 0, 3600)
+        else:
+            card_ttl = self._config_int("card_cache_seconds", 300, 0, 3600)
         cached = self._card_cache.get(cache_key)
         if (
             cached
@@ -947,11 +977,26 @@ class BilibiliParserPlugin(Star):
                 qr_src=make_qr_data_uri(info.canonical_url),
             )
         else:
+            gallery_srcs: list[str] = []
+            if info.images:
+                # 封面已经展示第一张图，图集只展示其余图片，避免重复。
+                extra_urls = info.images[1:] if not info.cover_url else info.images
+                gallery_srcs = [
+                    src
+                    for src in await asyncio.gather(
+                        *(
+                            self._client.fetch_image_data_uri(url, max_dimension=640)
+                            for url in extra_urls[:8]
+                        )
+                    )
+                    if src
+                ]
             data = build_dynamic_card_context(
                 info,
                 cover_src=cover_src,
                 avatar_src=avatar_src,
                 qr_src=make_qr_data_uri(info.canonical_url),
+                gallery_srcs=gallery_srcs,
             )
         image_path = await self.html_render(
             self._content_template,
@@ -1366,8 +1411,10 @@ class BilibiliParserPlugin(Star):
         video = pending.video
         if command.page > video.page_count:
             self._finish_download_job(job, "failed")
+            await self._restore_pending(event, pending)
             yield event.plain_result(
                 f"P{command.page} 不存在，本视频共有 {video.page_count}P。"
+                "编号仍然有效，可更换分 P 后重试。"
             )
             return
 
@@ -1376,6 +1423,7 @@ class BilibiliParserPlugin(Star):
         )
         if max_duration > 0 and video.duration > max_duration:
             self._finish_download_job(job, "failed")
+            await self._restore_pending(event, pending)
             yield event.plain_result(
                 "视频下载已拒绝：视频时长 "
                 f"{format_duration(video.duration)} 超过后台上限 "
@@ -1386,6 +1434,7 @@ class BilibiliParserPlugin(Star):
         api_key = str(self.config.get("yaohud_api_key", "") or "").strip()
         if not api_key:
             self._finish_download_job(job, "failed")
+            await self._restore_pending(event, pending)
             yield event.plain_result(
                 "视频下载未配置妖狐 API Key，请在插件后台完成配置。"
             )
@@ -1483,6 +1532,7 @@ class BilibiliParserPlugin(Star):
         )
         if max_duration > 0 and audio.duration > max_duration:
             self._finish_download_job(job, "failed")
+            await self._restore_pending(event, pending)
             yield event.plain_result(
                 "音频下载已拒绝：音频时长 "
                 f"{format_duration(audio.duration)} 超过后台上限 "
@@ -1703,56 +1753,22 @@ class BilibiliParserPlugin(Star):
         return max_duration <= 0 or video.duration <= max_duration
 
     def _parse_download_command(self, message: str) -> DownloadCommand | None:
-        value = str(message or "")
-        for media_type, keyword in (
-            ("video", self._download_keyword()),
-            ("audio", self._audio_download_keyword()),
-        ):
-            if not keyword:
-                continue
-            if media_type == "video" and not bool(
-                self.config.get("enable_video_download", False)
-            ):
-                continue
-            if media_type == "audio" and not bool(
-                self.config.get("enable_audio_download", False)
-            ):
-                continue
-            if media_type == "audio":
-                pattern = rf"{re.escape(keyword)} ([0-9]+)"
-            else:
-                pattern = rf"{re.escape(keyword)} ([0-9]+)(?: [Pp]([1-9][0-9]*))?"
-            match = re.fullmatch(pattern, value)
-            if not match:
-                continue
-            return DownloadCommand(
-                match.group(1),
-                int(match.group(2) or 1),
-                media_type=media_type,
-            )
-        return None
+        return parse_download_command(
+            message,
+            video_keyword=self._download_keyword(),
+            audio_keyword=self._audio_download_keyword(),
+            video_enabled=bool(self.config.get("enable_video_download", False)),
+            audio_enabled=bool(self.config.get("enable_audio_download", False)),
+        )
 
     def _is_download_status_command(self, message: str) -> bool:
-        if not self._active_download_keywords():
-            return False
-        value = str(message or "")
-        for keyword in self._active_download_keywords():
-            if value in {
-                f"{keyword} 状态",
-                f"{keyword} 查看",
-                f"{keyword} 查询",
-                f"{keyword}状态",
-                f"{keyword}查看",
-                f"{keyword}查询",
-            }:
-                return True
-        return False
+        return is_download_status_command(
+            message, self._active_download_keywords()
+        )
 
     def _is_download_cancel_command(self, message: str) -> bool:
-        value = str(message or "")
-        return any(
-            value == f"{keyword} 取消"
-            for keyword in self._active_download_keywords()
+        return is_download_cancel_command(
+            message, self._active_download_keywords()
         )
 
     def _download_permission_allowed(self, event: AstrMessageEvent) -> bool:
@@ -1875,6 +1891,18 @@ class BilibiliParserPlugin(Star):
             return
         async with self._download_lock:
             self._pending_downloads.pop(key, None)
+
+    async def _restore_pending(
+        self, event: AstrMessageEvent, pending: PendingDownload
+    ) -> None:
+        """校验失败时返还编号，用户修正命令后可直接重试，不必重新解析链接。"""
+        key = self._download_key(event)
+        if not key:
+            return
+        async with self._download_lock:
+            existing = self._pending_downloads.get(key)
+            if existing is None or existing.created_at <= pending.created_at:
+                self._pending_downloads[key] = pending
 
     async def _claim_download(
         self, event: AstrMessageEvent, command: DownloadCommand

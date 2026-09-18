@@ -43,7 +43,7 @@ class MainHandlerContractTests(unittest.TestCase):
         source_path = Path(__file__).parents[1] / "main.py"
         source = source_path.read_text(encoding="utf-8")
         self.assertIn("download_command = self._parse_download_command(event.message_str)", source)
-        self.assertIn("re.fullmatch(", source)
+        self.assertIn("return parse_download_command(", source)
         self.assertIn("secrets.compare_digest(command.code, pending.code)", source)
         self.assertIn("secrets.randbelow", source)
         self.assertIn("video_download_max_concurrency", source)
@@ -51,9 +51,10 @@ class MainHandlerContractTests(unittest.TestCase):
         self.assertIn("_prune_download_state(now, ttl, cooldown)", source)
         self.assertIn("当前下载队列已满，请稍后再试。", source)
         self.assertIn("_is_download_status_command", source)
-        self.assertIn('f"{keyword} 查看"', source)
+        self.assertIn("return is_download_status_command(", source)
         self.assertIn("可查看下载进度", source)
         self.assertIn("_is_download_cancel_command", source)
+        self.assertIn("return is_download_cancel_command(", source)
         self.assertIn('"video_download_max_duration_seconds", 900, 0, 14400', source)
         self.assertIn("视频下载已拒绝：视频时长", source)
         self.assertIn("Comp.Video.fromBase64(video_base64)", source)
@@ -169,6 +170,47 @@ class MainHandlerContractTests(unittest.TestCase):
         self.assertIn("enable_voice_transcription", source)
         self.assertIn("faster_whisper", source)
         self.assertIn("shutil.rmtree(download_dir, ignore_errors=True)", source)
+
+    def test_command_parsing_lives_in_the_pure_module(self):
+        commands_source = (
+            Path(__file__).parents[1] / "bilibili_parser" / "commands.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("re.fullmatch(", commands_source)
+        # 音频命令只有一个捕获组，必须先检查 lastindex 再取 group(2)。
+        self.assertIn("match.lastindex", commands_source)
+        # “视频下载取消”（无空格）也必须识别。
+        self.assertIn('f"{keyword}取消"', commands_source)
+
+    def test_download_validation_failures_restore_the_code(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("async def _restore_pending", source)
+        self.assertIn("await self._restore_pending(event, pending)", source)
+
+    def test_live_query_uses_a_short_cache(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn('"live_cache_seconds", 60, 0, 3600', source)
+
+    def test_live_end_notify_is_supported(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn('"enable_live_end_notify", False', source)
+        self.assertIn("should_notify_live_end", source)
+        self.assertIn("async def _notify_live_end", source)
+
+    def test_live_monitor_stops_when_disabled_and_polling_is_limited(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("def _live_monitor_enabled", source)
+        self.assertIn("asyncio.Semaphore(5)", source)
+        # 取消全部订阅后要清理掉无人订阅房间的状态缓存。
+        self.assertIn("for room in list(self._live_status_cache):", source)
+
+    def test_dynamic_gallery_is_wired_into_rendering(self):
+        source_path = Path(__file__).parents[1] / "main.py"
+        source = source_path.read_text(encoding="utf-8")
+        self.assertIn("gallery_srcs=gallery_srcs", source)
 
 
 if __name__ == "__main__":

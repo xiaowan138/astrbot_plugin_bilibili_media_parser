@@ -101,6 +101,20 @@
       font-size: 20px;
       font-weight: 700;
     }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .gallery img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      background: #e3e5e7;
+      border: 2px solid #18191c;
+      border-radius: 6px;
+    }
     .section { margin-top: 28px; }
     .section-title {
       display: flex;
@@ -213,12 +227,27 @@
       <div class="cover cover-fallback">封面暂时无法加载</div>
       {% endif %}
 
+      {% if gallery_srcs %}
+      <div class="gallery">
+        {% for src in gallery_srcs %}
+        <img src="{{ src | safe }}" alt="" decoding="sync">
+        {% endfor %}
+      </div>
+      {% endif %}
+
       {% if body_text %}
       <section class="section">
         <div class="section-title">{{ body_title | safe }}</div>
         <div class="copy">{{ body_text | safe }}</div>
       </section>
       {% endif %}
+
+      {% for section in extra_sections %}
+      <section class="section">
+        <div class="section-title">{{ section.title | safe }}</div>
+        <div class="copy">{{ section.text | safe }}</div>
+      </section>
+      {% endfor %}
 
       {% if ai_summary %}
       <section class="section">

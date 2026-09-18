@@ -57,8 +57,10 @@ class ConfigSchemaTests(unittest.TestCase):
         required = {
             "max_links_per_message": 3,
             "enable_live_monitor": False,
+            "enable_live_end_notify": False,
             "live_monitor_keyword": "开播提醒",
             "live_monitor_interval_seconds": 60,
+            "live_cache_seconds": 60,
             "live_query_keyword": "直播查询",
             "enable_audio_download": False,
             "audio_download_keyword": "音频下载",

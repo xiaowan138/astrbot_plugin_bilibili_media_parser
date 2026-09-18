@@ -117,6 +117,14 @@ class ExtractorTests(unittest.TestCase):
         result = extract_video_reference("bilibili://article/cv300010")
         self.assertEqual((result.kind, result.value), ("article", "300010"))
 
+    def test_extracts_audio_uri(self):
+        result = extract_video_reference("bilibili://audio/au10004684671")
+        self.assertEqual((result.kind, result.value), ("auid", "10004684671"))
+
+    def test_extracts_audio_uri_without_prefix(self):
+        result = extract_video_reference("bilibili://audio/10004684671")
+        self.assertEqual((result.kind, result.value), ("auid", "10004684671"))
+
     def test_extracts_opus_dynamic_url(self):
         result = extract_video_reference(
             "https://www.bilibili.com/opus/967717348014293017"

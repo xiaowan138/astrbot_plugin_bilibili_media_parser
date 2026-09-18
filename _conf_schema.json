@@ -151,6 +151,12 @@
     "hint": "默认关闭。开启后可使用“开播提醒 订阅 房间号”订阅直播间，主播开播时自动通知所在会话；订阅保存在本地，重启不丢失。",
     "default": false
   },
+  "enable_live_end_notify": {
+    "type": "bool",
+    "description": "【直播】开启下播提醒",
+    "hint": "默认关闭。开启后，已订阅的直播间在主播下播时也会通知所在会话；与“开启开播提醒”共用订阅列表和轮询任务。",
+    "default": false
+  },
   "live_monitor_keyword": {
     "type": "string",
     "description": "【直播】开播提醒命令",
@@ -161,6 +167,12 @@
     "type": "int",
     "description": "【直播/高级】开播轮询间隔（秒）",
     "hint": "推荐 60，可填 30-600。间隔越短提醒越及时，但对 B 站接口的请求越频繁；修改后需要重载插件。",
+    "default": 60
+  },
+  "live_cache_seconds": {
+    "type": "int",
+    "description": "【直播/高级】直播信息缓存时间（秒）",
+    "hint": "推荐 60。直播状态变化很快，缓存时间过长会查询到过期的开播状态；填 0 关闭直播缓存。",
     "default": 60
   },
   "yaohud_api_key": {

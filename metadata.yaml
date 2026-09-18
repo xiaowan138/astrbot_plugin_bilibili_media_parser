@@ -2,7 +2,7 @@ name: astrbot_plugin_bilibili_media_parser
 display_name: B站全内容解析
 desc: 自动识别并解析 B 站视频、音频、专栏、直播、番剧、动态等内容链接和 QQ 小程序分享，支持多链接解析、开播提醒、音视频下载与 AI 总结。
 short_desc: B站视频/音频/专栏/直播/番剧/动态解析、开播提醒与 AI 总结。
-version: v1.2.0
+version: v1.3.0
 author: xiaowan
 repo: https://github.com/xiaowan138/astrbot_plugin_bilibili_media_parser
 astrbot_version: ">=4.5.7,<5"

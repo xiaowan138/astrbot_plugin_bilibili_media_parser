@@ -106,3 +106,10 @@ def should_notify_live_start(previous: int | None, current: int) -> bool:
     if current != 1:
         return False
     return previous in (0, 2)
+
+
+def should_notify_live_end(previous: int | None, current: int) -> bool:
+    """True when the room transitioned out of a live state."""
+    if previous != 1:
+        return False
+    return current in (0, 2)

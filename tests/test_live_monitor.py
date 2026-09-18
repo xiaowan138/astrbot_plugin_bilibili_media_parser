@@ -5,6 +5,7 @@ from bilibili_parser.live_monitor import (
     MAX_TOTAL,
     MAX_UMOS_PER_ROOM,
     LiveSubscriptionStore,
+    should_notify_live_end,
     should_notify_live_start,
 )
 
@@ -120,6 +121,26 @@ class ShouldNotifyLiveStartTests(unittest.TestCase):
     def test_no_notification_when_not_live(self):
         self.assertFalse(should_notify_live_start(0, 0))
         self.assertFalse(should_notify_live_start(1, 0))
+
+
+class ShouldNotifyLiveEndTests(unittest.TestCase):
+    def test_notifies_on_live_to_idle_transition(self):
+        self.assertTrue(should_notify_live_end(1, 0))
+
+    def test_notifies_on_live_to_round_robin_transition(self):
+        self.assertTrue(should_notify_live_end(1, 2))
+
+    def test_no_notification_on_first_observation(self):
+        # 重启后第一次轮询不推送，避免对未在播的直播间误报下播。
+        self.assertFalse(should_notify_live_end(None, 0))
+        self.assertFalse(should_notify_live_end(None, 1))
+
+    def test_no_notification_when_still_live(self):
+        self.assertFalse(should_notify_live_end(1, 1))
+
+    def test_no_notification_when_already_idle(self):
+        self.assertFalse(should_notify_live_end(0, 0))
+        self.assertFalse(should_notify_live_end(2, 0))
 
 
 if __name__ == "__main__":

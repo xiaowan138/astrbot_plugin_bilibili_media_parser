@@ -252,6 +252,7 @@ class BangumiInfo:
     owner_face_url: str
     total_episodes: int
     area_names: list[str] = field(default_factory=list)
+    episode_names: list[str] = field(default_factory=list)
     view: int = 0
     danmaku: int = 0
     favorite: int = 0
@@ -298,6 +299,21 @@ def bangumi_from_api_data(data: dict[str, Any], *, ep_id: int = 0) -> BangumiInf
                 )
                 break
 
+    episode_names: list[str] = []
+    for episode in episodes[-8:]:
+        if not isinstance(episode, dict):
+            continue
+        name = " ".join(
+            part
+            for part in (
+                _as_str(episode.get("title")),
+                _as_str(episode.get("long_title")),
+            )
+            if part
+        )
+        if name:
+            episode_names.append(name)
+
     up_info = data.get("up_info") if isinstance(data.get("up_info"), dict) else {}
     stat = data.get("stat") if isinstance(data.get("stat"), dict) else {}
     areas = data.get("areas") if isinstance(data.get("areas"), list) else []
@@ -322,6 +338,7 @@ def bangumi_from_api_data(data: dict[str, Any], *, ep_id: int = 0) -> BangumiInf
             for area in areas
             if isinstance(area, dict) and area.get("name")
         ],
+        episode_names=episode_names,
         view=_as_int(stat.get("views")),
         danmaku=_as_int(stat.get("danmakus")),
         favorite=_as_int(stat.get("favorite")),
