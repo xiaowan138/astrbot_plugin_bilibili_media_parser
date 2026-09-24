@@ -115,6 +115,24 @@
     "hint": "推荐 60。模型响应较慢时调大；超时不会影响基础视频卡片发送。",
     "default": 60
   },
+  "enable_manual_summary": {
+    "type": "bool",
+    "description": "【AI 总结】开启手动总结命令",
+    "hint": "默认关闭。开启后可发送“视频总结 BV号或链接”只总结这一个视频，不必为群里所有链接都开启自动总结。",
+    "default": false
+  },
+  "manual_summary_keyword": {
+    "type": "string",
+    "description": "【AI 总结】手动总结命令",
+    "hint": "新手保持“视频总结”。命令示例：视频总结 BV1xx411c7RD、视频总结 https://b23.tv/xxxx；留空关闭该命令。",
+    "default": "视频总结"
+  },
+  "summary_cache_seconds": {
+    "type": "int",
+    "description": "【AI 总结】概要缓存时间（秒）",
+    "hint": "推荐 86400（1 天）。同一视频在有效期内再次解析会复用已生成的概要，不再抓字幕或调用模型；填 0 关闭。",
+    "default": 86400
+  },
   "featured_comment_candidates": {
     "type": "int",
     "description": "【评论】热门评论候选数",

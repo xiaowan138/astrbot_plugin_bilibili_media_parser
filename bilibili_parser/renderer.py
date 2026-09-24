@@ -12,6 +12,7 @@ from .models import (
     BangumiInfo,
     DynamicInfo,
     LiveInfo,
+    UserInfo,
     VideoInfo,
 )
 
@@ -66,6 +67,21 @@ def build_card_context(
     description = _truncate(video.description, 520) or "UP 主暂未填写视频简介。"
     summary = _truncate(video.summary, 700)
     comment_avatar_srcs = comment_avatar_srcs or {}
+    # 多 P 视频列出前若干 P，太长会撑爆长图，剩余数量单独提示。
+    part_limit = 10
+    parts = (
+        [
+            {
+                "index": str(page.index),
+                "title": _escape(_truncate(page.title, 46) or "（未命名分 P）"),
+                "duration": format_duration(page.duration),
+            }
+            for page in video.pages[:part_limit]
+        ]
+        if len(video.pages) > 1
+        else []
+    )
+    parts_more = max(video.page_count - len(parts), 0) if parts else 0
     comment_contexts = []
     for comment in video.featured_comments:
         replies = [
@@ -108,6 +124,8 @@ def build_card_context(
         "qr_src": _escape(qr_src),
         "footer_class": "" if qr_src else "no-qr",
         "featured_comments": comment_contexts,
+        "parts": parts,
+        "parts_more": str(parts_more),
         "stats": [
             {"label": "播放", "value": format_count(stats.view)},
             {"label": "弹幕", "value": format_count(stats.danmaku)},
@@ -224,6 +242,7 @@ def _content_card_context(
     summary_source: str = "",
     gallery_srcs: list[str] | None = None,
     extra_sections: list[tuple[str, str]] | None = None,
+    has_cover: bool = True,
 ) -> dict[str, Any]:
     """Shared context builder for article/live/dynamic/bangumi cards."""
     return {
@@ -238,6 +257,8 @@ def _content_card_context(
             for label, value in meta_items
         ],
         "cover_src": _escape(cover_src),
+        # 用户名片这类没有封面概念的内容，不显示“封面加载失败”占位块。
+        "cover_fallback": "封面暂时无法加载" if has_cover else "",
         "gallery_srcs": [_escape(src) for src in (gallery_srcs or []) if src],
         "extra_sections": [
             {"title": _escape(title_text), "text": _escape(text)}
@@ -499,4 +520,55 @@ def build_bangumi_text_fallback(bangumi: BangumiInfo) -> str:
     if bangumi.evaluate:
         lines.extend(["简介：", _truncate(bangumi.evaluate, 360)])
     lines.append(bangumi.canonical_url)
+    return "\n".join(lines)
+
+
+def build_user_card_context(
+    user: UserInfo,
+    *,
+    avatar_src: str = "",
+    qr_src: str = "",
+) -> dict[str, Any]:
+    meta_items: list[tuple[str, str]] = [("等级", f"Lv{user.current_level}")]
+    if user.official_title:
+        meta_items.append(("认证", _truncate(user.official_title, 30)))
+    return _content_card_context(
+        brand_sub="B站UP主解析",
+        content_type="UP主",
+        title=user.name,
+        author_name=user.name,
+        author_meta=f"UID {user.mid}",
+        avatar_src=avatar_src,
+        meta_items=meta_items,
+        cover_src="",
+        body_title="个人签名",
+        body_text=_truncate(user.sign, 520) or "这位 UP 主还没有填写签名。",
+        tags=[],
+        stats=[
+            ("粉丝", user.fans),
+            ("关注", user.following),
+            ("投稿", user.archive_count),
+            ("获赞", user.like_num),
+        ],
+        content_id=user.canonical_id,
+        canonical_url=user.canonical_url,
+        qr_src=qr_src,
+        has_cover=False,
+    )
+
+
+def build_user_text_fallback(user: UserInfo) -> str:
+    lines = [
+        f"【B站UP主】{user.name}",
+        f"UID {user.mid}  |  等级 Lv{user.current_level}",
+        (
+            f"粉丝 {format_count(user.fans)}  关注 {format_count(user.following)}  "
+            f"投稿 {format_count(user.archive_count)}  获赞 {format_count(user.like_num)}"
+        ),
+    ]
+    if user.official_title:
+        lines.append(f"认证：{user.official_title}")
+    if user.sign:
+        lines.extend(["签名：", _truncate(user.sign, 240)])
+    lines.append(user.canonical_url)
     return "\n".join(lines)

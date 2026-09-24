@@ -75,6 +75,7 @@ class AudioInfo:
     play_count: int
     collect_count: int
     comment_count: int
+    owner_face_url: str = ""
 
     @property
     def canonical_url(self) -> str:
@@ -362,6 +363,7 @@ class DynamicInfo:
     favorite_count: int = 0
     ai_summary: str = ""
     summary_source: str = ""
+    cover_url: str = ""
 
     @property
     def canonical_url(self) -> str:
@@ -440,6 +442,7 @@ def dynamic_from_page_state(state: dict[str, Any]) -> DynamicInfo:
         comment_count=comment_count,
         forward_count=forward_count,
         favorite_count=favorite_count,
+        cover_url=images[0] if images else "",
     )
 
 
@@ -566,4 +569,61 @@ def video_from_view_data(data: dict[str, Any]) -> VideoInfo:
             share=_as_int(stat.get("share")),
             like=_as_int(stat.get("like")),
         ),
+    )
+
+
+@dataclass(slots=True)
+class UserInfo:
+    mid: int
+    name: str
+    face_url: str
+    sign: str
+    fans: int
+    following: int
+    archive_count: int
+    like_num: int
+    current_level: int
+    official_title: str = ""
+
+    @property
+    def canonical_url(self) -> str:
+        return f"https://space.bilibili.com/{self.mid}"
+
+    @property
+    def canonical_id(self) -> str:
+        return f"uid{self.mid}"
+
+
+def user_from_card_data(data: dict[str, Any], *, mid: int = 0) -> UserInfo:
+    """Convert the /x/web-interface/card payload into a UserInfo model.
+
+    投稿数与获赞数在 data 顶层，粉丝/关注/签名在 data.card 里，两者都要读。
+    """
+    if not isinstance(data, dict):
+        raise ValueError("用户数据格式无效")
+
+    card = data.get("card") if isinstance(data.get("card"), dict) else {}
+    user_mid = _as_int(card.get("mid")) or mid
+    name = _as_str(card.get("name"))
+    if not user_mid or not name:
+        raise ValueError("用户数据缺少 mid 或昵称")
+
+    official = card.get("official")
+    official_title = (
+        _as_str(official.get("title")) if isinstance(official, dict) else ""
+    )
+    level_info = (
+        card.get("level_info") if isinstance(card.get("level_info"), dict) else {}
+    )
+    return UserInfo(
+        mid=user_mid,
+        name=name,
+        face_url=_as_str(card.get("face")),
+        sign=_as_str(card.get("sign") or card.get("user_sig")),
+        fans=_as_int(data.get("follower") or card.get("fans")),
+        following=_as_int(card.get("attention")),
+        archive_count=_as_int(data.get("archive_count") or card.get("arc_count")),
+        like_num=_as_int(data.get("like_num")),
+        current_level=_as_int(level_info.get("current_level")),
+        official_title=official_title,
     )

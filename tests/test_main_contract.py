@@ -42,7 +42,7 @@ class MainHandlerContractTests(unittest.TestCase):
     def test_video_download_is_keyword_gated_and_uses_temporary_file(self):
         source_path = Path(__file__).parents[1] / "main.py"
         source = source_path.read_text(encoding="utf-8")
-        self.assertIn("download_command = self._parse_download_command(event.message_str)", source)
+        self.assertIn("download_command = self._parse_download_command(message_text)", source)
         self.assertIn("return parse_download_command(", source)
         self.assertIn("secrets.compare_digest(command.code, pending.code)", source)
         self.assertIn("secrets.randbelow", source)

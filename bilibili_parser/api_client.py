@@ -24,12 +24,14 @@ from .models import (
     DynamicInfo,
     FeaturedComment,
     LiveInfo,
+    UserInfo,
     VideoInfo,
     article_from_api_data,
     audio_from_api_data,
     bangumi_from_api_data,
     dynamic_from_page_state,
     live_from_api_data,
+    user_from_card_data,
     video_from_view_data,
 )
 from .yaohud import YAO_HUD_ENDPOINT, find_direct_media_url, is_allowed_media_url
@@ -47,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # 引用类型全集：短链重定向后可能落在任何一种内容上，都必须接受。
 _TYPED_KINDS = frozenset(
-    {"bvid", "aid", "auid", "article", "live", "dynamic", "ep", "ss"}
+    {"bvid", "aid", "auid", "article", "live", "dynamic", "ep", "ss", "user"}
 )
 
 
@@ -78,6 +80,8 @@ class ResolvedVideo:
             return f"ep{self.value}"
         if self.kind == "ss":
             return f"ss{self.value}"
+        if self.kind == "user":
+            return f"uid{self.value}"
         return self.value
 
 
@@ -278,9 +282,16 @@ class BilibiliApiClient:
             base=AUDIO_API_BASE,
         )
         try:
-            return audio_from_api_data(payload)
+            info = audio_from_api_data(payload)
         except ValueError as exc:
             raise BilibiliApiError(str(exc)) from exc
+        # 音频接口不返回上传者头像，与直播一样按 mid 补一次用户名片。
+        if not info.owner_face_url and info.owner_mid:
+            card_data = await self._fetch_user_card(info.owner_mid)
+            face = str(card_data.get("face") or "").strip()
+            if face:
+                info = replace(info, owner_face_url=face)
+        return info
 
     async def fetch_article_info(self, resolved: ResolvedVideo) -> ArticleInfo:
         """Fetch Bilibili article (CV) metadata via the article API."""
@@ -333,18 +344,15 @@ class BilibiliApiClient:
         # The room-info API does not include the anchor name or avatar. When
         # they are missing, resolve both once from the user card by mid.
         if (not info.owner_name or not info.owner_face_url) and info.owner_mid:
-            try:
-                card = await self._get_api_json(
-                    "/x/web-interface/card", {"mid": info.owner_mid}
+            card_data = await self._fetch_user_card(info.owner_mid)
+            name = str(card_data.get("name") or "").strip()
+            face = str(card_data.get("face") or "").strip()
+            if name or face:
+                info = replace(
+                    info,
+                    owner_name=name or info.owner_name,
+                    owner_face_url=face or info.owner_face_url,
                 )
-                card_data = card.get("card") if isinstance(card.get("card"), dict) else {}
-                name = str(card_data.get("name") or "").strip()
-                face = str(card_data.get("face") or "").strip()
-                if name or face:
-                    info = replace(info, owner_name=name or info.owner_name,
-                                   owner_face_url=face or info.owner_face_url)
-            except BilibiliApiError:
-                pass
         return info
 
     async def fetch_dynamic_info(self, resolved: ResolvedVideo) -> DynamicInfo:
@@ -389,6 +397,23 @@ class BilibiliApiClient:
             return bangumi_from_api_data(
                 payload, ep_id=numeric_id if resolved.kind == "ep" else 0
             )
+        except ValueError as exc:
+            raise BilibiliApiError(str(exc)) from exc
+
+    async def fetch_user_info(self, resolved: ResolvedVideo) -> UserInfo:
+        """Fetch a UP 主 profile (space page) summary."""
+        if resolved.kind != "user":
+            raise BilibiliApiError(
+                f"内部错误：fetch_user_info 期望 user 类型，实际为 {resolved.kind}"
+            )
+        try:
+            mid = int(resolved.value)
+        except (ValueError, TypeError) as exc:
+            raise BilibiliApiError(f"用户 UID 格式无效：{resolved.value}") from exc
+        # card 接口的用户资料放在 data 顶层与 data.card 两处，整体传给模型。
+        payload = await self._get_api_json("/x/web-interface/card", {"mid": mid})
+        try:
+            return user_from_card_data(payload, mid=mid)
         except ValueError as exc:
             raise BilibiliApiError(str(exc)) from exc
 
@@ -827,6 +852,15 @@ class BilibiliApiClient:
         if not isinstance(payload, dict):
             raise BilibiliApiError("B 站接口缺少 data 字段")
         return payload
+
+    async def _fetch_user_card(self, mid: int) -> dict[str, Any]:
+        """Return the user-card sub-object, or {} when the lookup fails."""
+        try:
+            payload = await self._get_api_json("/x/web-interface/card", {"mid": mid})
+        except BilibiliApiError:
+            return {}
+        card = payload.get("card")
+        return card if isinstance(card, dict) else {}
 
     async def _get_json_url(
         self,

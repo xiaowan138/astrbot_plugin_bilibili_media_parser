@@ -6,7 +6,6 @@ from bilibili_parser.api_client import (
     _embedded_reference,
     _extract_initial_state,
     _extract_meta_urls,
-    audio_play_urls_from_payload,
 )
 from bilibili_parser.extractor import VideoReference
 

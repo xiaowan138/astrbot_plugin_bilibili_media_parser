@@ -6,7 +6,6 @@ from collections.abc import AsyncGenerator
 from datetime import date
 import hashlib
 import json
-import re
 import secrets
 import shutil
 import tempfile
@@ -33,10 +32,12 @@ from .bilibili_parser.commands import (
     parse_download_command,
     parse_live_monitor_command,
     parse_live_query_command,
+    parse_summary_command,
 )
 from .bilibili_parser.duplicate_guard import DuplicateGuard
 from .bilibili_parser.extractor import (
     VideoReference,
+    extract_video_reference,
     extract_video_references,
 )
 from .bilibili_parser.live_monitor import (
@@ -45,11 +46,7 @@ from .bilibili_parser.live_monitor import (
     should_notify_live_start,
 )
 from .bilibili_parser.models import (
-    ArticleInfo,
     AudioInfo,
-    BangumiInfo,
-    DynamicInfo,
-    LiveInfo,
     VideoInfo,
 )
 from .bilibili_parser.renderer import (
@@ -65,12 +62,14 @@ from .bilibili_parser.renderer import (
     build_live_card_context,
     build_live_text_fallback,
     build_text_fallback,
+    build_user_card_context,
+    build_user_text_fallback,
     format_duration,
     make_qr_data_uri,
 )
 
-# 走通用内容卡片流程的引用类型（专栏/直播/动态/番剧）。
-_CONTENT_KINDS = {"article", "live", "dynamic", "ep", "ss"}
+# 走通用内容卡片流程的引用类型（专栏/直播/动态/番剧/UP 主）。
+_CONTENT_KINDS = {"article", "live", "dynamic", "ep", "ss", "user"}
 
 
 @dataclass(slots=True)
@@ -135,6 +134,14 @@ class BilibiliParserPlugin(Star):
         self._live_notify_failures: dict[tuple[int, str], int] = {}
         self._live_monitor_lock = asyncio.Lock()
         self._live_store: LiveSubscriptionStore | None = None
+        # AI 总结要抓字幕并调用模型，按内容编号缓存结果避免反复消耗额度。
+        self._summary_cache: dict[str, tuple[float, str, str]] = {}
+        # 群聊长时间没人发言时消息入口不会触发，插件加载时就先起轮询任务。
+        # 事件循环尚未就绪则跳过，后续消息仍会调用同一个引导方法。
+        try:
+            self._ensure_live_monitor_started()
+        except RuntimeError:
+            logger.info("B站直播监控：事件循环尚未就绪，稍后由消息入口启动轮询")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -146,25 +153,28 @@ class BilibiliParserPlugin(Star):
         # 传播，避免拦截普通聊天消息，导致其他插件和主 agent 无法收到。
         handled = False
         try:
-            download_command = self._parse_download_command(event.message_str)
+            # 手机输入法经常带出首尾空格，命令匹配前先统一裁掉，否则
+            # “视频下载 123456 ” 会静默不响应，而卡片提示语正是这句话。
+            message_text = str(event.message_str or "").strip()
+            download_command = self._parse_download_command(message_text)
             if download_command is not None:
                 handled = True
                 async for result in self._handle_download_request(event, download_command):
                     yield result
                 return
-            if self._is_download_status_command(event.message_str):
+            if self._is_download_status_command(message_text):
                 handled = True
                 async for result in self._handle_download_status(event):
                     yield result
                 return
-            if self._is_download_cancel_command(event.message_str):
+            if self._is_download_cancel_command(message_text):
                 handled = True
                 async for result in self._handle_download_cancel(event):
                     yield result
                 return
 
             live_matched, live_room_id = self._parse_live_query_command(
-                event.message_str
+                message_text
             )
             if live_matched:
                 handled = True
@@ -175,13 +185,13 @@ class BilibiliParserPlugin(Star):
                     return
                 async for result in self._handle_content_card(
                     event,
-                    VideoReference("live", live_room_id),
+                    VideoReference("live", str(live_room_id)),
                     check_duplicate=False,
                 ):
                     yield result
                 return
 
-            monitor_command = self._parse_live_monitor_command(event.message_str)
+            monitor_command = self._parse_live_monitor_command(message_text)
             if monitor_command is not None:
                 handled = True
                 async for result in self._handle_live_monitor_command(
@@ -190,12 +200,19 @@ class BilibiliParserPlugin(Star):
                     yield result
                 return
 
+            summary_target = self._parse_summary_command(message_text)
+            if summary_target is not None:
+                handled = True
+                async for result in self._handle_manual_summary(event, summary_target):
+                    yield result
+                return
+
             try:
                 message_parts = event.get_messages()
             except (AttributeError, TypeError):
                 message_parts = getattr(event.message_obj, "message", [])
             references = extract_video_references(
-                event.message_str,
+                message_text,
                 message_parts,
                 getattr(event.message_obj, "raw_message", None),
             )
@@ -208,6 +225,13 @@ class BilibiliParserPlugin(Star):
             for reference in references[:limit]:
                 async for result in self._dispatch_reference(event, reference):
                     yield result
+            dropped = len(references) - limit
+            if dropped > 0:
+                # 静默丢弃剩余链接会让用户以为插件漏解析，明确说明剩余数量。
+                yield event.plain_result(
+                    f"这条消息共有 {len(references)} 个 B 站链接，"
+                    f"按上限只解析了前 {limit} 个，剩余 {dropped} 个请分开发送。"
+                )
         except BilibiliApiError as exc:
             logger.warning(f"B站链接解析失败：{exc}")
             if bool(self.config.get("show_error_message", True)):
@@ -336,7 +360,8 @@ class BilibiliParserPlugin(Star):
             f"你订阅的直播间开播啦！\n房间号：{room_id}\n标题：{title}\n"
             f"https://live.bilibili.com/{room_id}"
         )
-        await self._push_live_notice(store, room_id, message)
+        chain = await self._build_live_notice_chain(room_id, message)
+        await self._push_live_notice(store, room_id, chain)
 
     async def _notify_live_end(
         self, store: LiveSubscriptionStore, room_id: int, title: str
@@ -345,16 +370,32 @@ class BilibiliParserPlugin(Star):
             f"你订阅的直播间已下播。\n房间号：{room_id}\n标题：{title}\n"
             f"https://live.bilibili.com/{room_id}"
         )
-        await self._push_live_notice(store, room_id, message)
+        await self._push_live_notice(
+            store, room_id, MessageChain([Comp.Plain(message)])
+        )
+
+    async def _build_live_notice_chain(
+        self, room_id: int, message: str
+    ) -> MessageChain:
+        """开播提醒优先发直播长图，取数据或渲染失败时退回纯文本。"""
+        try:
+            info = await self._client.fetch_live_info(
+                ResolvedVideo("live", str(room_id))
+            )
+            image_path = await self._render_content_card("live", info)
+        except Exception:
+            logger.exception("B站直播监控：开播提醒卡片渲染失败，改发文本提醒")
+            return MessageChain([Comp.Plain(message)])
+        return MessageChain(
+            [Comp.Image.fromFileSystem(image_path), Comp.Plain(message)]
+        )
 
     async def _push_live_notice(
-        self, store: LiveSubscriptionStore, room_id: int, message: str
+        self, store: LiveSubscriptionStore, room_id: int, chain: MessageChain
     ) -> None:
         for umo in store.umos_for(room_id):
             try:
-                await self.context.send_message(
-                    umo, MessageChain([Comp.Plain(message)])
-                )
+                await self.context.send_message(umo, chain)
                 self._live_notify_failures.pop((room_id, umo), None)
             except Exception:
                 failures = self._live_notify_failures.get((room_id, umo), 0) + 1
@@ -776,8 +817,13 @@ class BilibiliParserPlugin(Star):
         ):
             return cached[1]
 
-        cover_src = await self._client.fetch_image_data_uri(
-            audio.cover_url, max_dimension=1280
+        cover_src, avatar_src = await asyncio.gather(
+            self._client.fetch_image_data_uri(
+                audio.cover_url, max_dimension=1280
+            ),
+            self._client.fetch_image_data_uri(
+                audio.owner_face_url, max_dimension=160
+            ),
         )
         if not cover_src:
             logger.warning("B站音频解析：封面下载失败，使用占位图：%s", audio.cover_url)
@@ -785,6 +831,7 @@ class BilibiliParserPlugin(Star):
         data = build_audio_card_context(
             audio,
             cover_src=cover_src,
+            avatar_src=avatar_src,
             qr_src=make_qr_data_uri(audio.canonical_url),
         )
         image_path = await self.html_render(
@@ -901,6 +948,8 @@ class BilibiliParserPlugin(Star):
             info = await self._client.fetch_live_info(resolved)
         elif resolved.kind in {"ep", "ss"}:
             info = await self._client.fetch_bangumi_info(resolved)
+        elif resolved.kind == "user":
+            info = await self._client.fetch_user_info(resolved)
         else:
             info = await self._client.fetch_dynamic_info(resolved)
         if ttl > 0:
@@ -941,18 +990,18 @@ class BilibiliParserPlugin(Star):
         ):
             return cached[1]
 
-        cover_url = info.cover_url
-        if kind == "dynamic" and not cover_url and info.images:
-            cover_url = info.images[0]
+        # UP 主名片没有封面，硬要渲染会出现“封面暂时无法加载”占位块。
+        cover_url = "" if kind == "user" else info.cover_url
         avatar_url = (
             getattr(info, "author_face_url", "")
             or getattr(info, "owner_face_url", "")
+            or getattr(info, "face_url", "")
         )
         cover_src, avatar_src = await asyncio.gather(
             self._client.fetch_image_data_uri(cover_url, max_dimension=1280),
             self._client.fetch_image_data_uri(avatar_url, max_dimension=160),
         )
-        if not cover_src:
+        if cover_url and not cover_src:
             logger.warning("B站内容解析：封面下载失败，使用占位图：%s", cover_url)
 
         if kind == "article":
@@ -976,11 +1025,17 @@ class BilibiliParserPlugin(Star):
                 avatar_src=avatar_src,
                 qr_src=make_qr_data_uri(info.canonical_url),
             )
+        elif kind == "user":
+            data = build_user_card_context(
+                info,
+                avatar_src=avatar_src,
+                qr_src=make_qr_data_uri(info.canonical_url),
+            )
         else:
             gallery_srcs: list[str] = []
             if info.images:
                 # 封面已经展示第一张图，图集只展示其余图片，避免重复。
-                extra_urls = info.images[1:] if not info.cover_url else info.images
+                extra_urls = info.images[1:]
                 gallery_srcs = [
                     src
                     for src in await asyncio.gather(
@@ -1022,6 +1077,7 @@ class BilibiliParserPlugin(Star):
             "dynamic": "动态",
             "ep": "番剧",
             "ss": "番剧",
+            "user": "UP 主",
         }.get(kind, "内容")
 
     @staticmethod
@@ -1032,6 +1088,8 @@ class BilibiliParserPlugin(Star):
             return build_live_text_fallback(info)
         if kind in {"ep", "ss"}:
             return build_bangumi_text_fallback(info)
+        if kind == "user":
+            return build_user_text_fallback(info)
         return build_dynamic_text_fallback(info)
 
     def _prune_cache(self, ttl: int) -> None:
@@ -1089,10 +1147,15 @@ class BilibiliParserPlugin(Star):
         self._prune_card_cache(ttl)
 
     async def _with_optional_summary(
-        self, event: AstrMessageEvent, video: VideoInfo
+        self, event: AstrMessageEvent, video: VideoInfo, *, force: bool = False
     ) -> VideoInfo:
-        if not bool(self.config.get("enable_ai_summary", False)):
+        if not force and not bool(self.config.get("enable_ai_summary", False)):
             return video
+
+        cached = self._get_cached_summary(video.canonical_id)
+        if cached is not None:
+            summary, source = cached
+            return replace(video, summary=summary, summary_source=source)
 
         subtitle_limit = self._config_int(
             "subtitle_max_chars", 12000, 1000, 50000
@@ -1145,6 +1208,7 @@ class BilibiliParserPlugin(Star):
         )
         if not summary:
             return video
+        self._put_cached_summary(video.canonical_id, summary, source)
         return replace(video, summary=summary, summary_source=source)
 
     async def _request_ai_summary(
@@ -1221,6 +1285,10 @@ class BilibiliParserPlugin(Star):
         """Generate an optional AI summary for article/dynamic cards."""
         if not bool(self.config.get("enable_ai_summary", False)):
             return info
+        cached = self._get_cached_summary(info.canonical_id)
+        if cached is not None:
+            summary, source = cached
+            return replace(info, ai_summary=summary, summary_source=source)
         if kind == "article":
             material = info.content or info.summary
             source = "专栏正文" if info.content else "专栏摘要"
@@ -1249,7 +1317,88 @@ class BilibiliParserPlugin(Star):
         )
         if not summary:
             return info
+        self._put_cached_summary(info.canonical_id, summary, source)
         return replace(info, ai_summary=summary, summary_source=source)
+
+    def _summary_cache_ttl(self) -> int:
+        return self._config_int("summary_cache_seconds", 86400, 0, 604800)
+
+    def _get_cached_summary(self, key: str) -> tuple[str, str] | None:
+        ttl = self._summary_cache_ttl()
+        entry = self._summary_cache.get(key) if ttl > 0 and key else None
+        if entry is None:
+            return None
+        created, summary, source = entry
+        if time.monotonic() - created >= ttl:
+            self._summary_cache.pop(key, None)
+            return None
+        return summary, source
+
+    def _put_cached_summary(self, key: str, summary: str, source: str) -> None:
+        ttl = self._summary_cache_ttl()
+        if ttl <= 0 or not key or not summary:
+            return
+        now = time.monotonic()
+        self._summary_cache[key] = (now, summary, source)
+        self._summary_cache = {
+            cache_key: entry
+            for cache_key, entry in self._summary_cache.items()
+            if now - entry[0] < ttl
+        }
+        while len(self._summary_cache) > 512:
+            oldest_key = min(
+                self._summary_cache,
+                key=lambda cache_key: self._summary_cache[cache_key][0],
+            )
+            self._summary_cache.pop(oldest_key, None)
+
+    def _summary_keyword(self) -> str:
+        return str(self.config.get("manual_summary_keyword", "视频总结") or "").strip()
+
+    def _parse_summary_command(self, message: str) -> str | None:
+        if not bool(self.config.get("enable_manual_summary", False)):
+            return None
+        return parse_summary_command(message, self._summary_keyword())
+
+    async def _handle_manual_summary(
+        self, event: AstrMessageEvent, target: str
+    ) -> AsyncGenerator:
+        """按需用一次 AI 概要，绕开 enable_ai_summary 的全局开关。"""
+        keyword = self._summary_keyword()
+        if not target:
+            yield event.plain_result(f"用法：{keyword} <BV号或 B 站视频链接>")
+            return
+        reference = extract_video_reference(target)
+        if reference is None:
+            yield event.plain_result(
+                f"没有从“{target}”里识别出 B 站视频编号。用法：{keyword} <BV号或链接>"
+            )
+            return
+        try:
+            resolved = await self._client.resolve_reference(reference)
+            if resolved.kind not in {"bvid", "aid"}:
+                yield event.plain_result(
+                    f"{keyword} 目前只支持视频内容，这个链接是"
+                    f"{self._content_type_label(resolved.kind)}。"
+                )
+                return
+            video = await self._get_video_info(resolved)
+            summarized = await self._with_optional_summary(event, video, force=True)
+        except BilibiliApiError as exc:
+            logger.warning(f"B站视频概要：手动总结失败：{exc}")
+            yield event.plain_result(f"视频概要生成失败：{exc}")
+            return
+        if not summarized.summary:
+            yield event.plain_result(
+                f"{summarized.canonical_id} 没有生成概要："
+                "这个视频没有可用字幕，也没有开启语音转写。"
+            )
+            return
+        yield event.plain_result(
+            f"【B站视频概要】{summarized.title}\n"
+            f"（依据：{summarized.summary_source}）\n{summarized.summary}\n"
+            f"{summarized.canonical_url}"
+        )
 
     async def _transcribe_video(self, video: VideoInfo) -> str:
         """Download one temporary video and transcribe its speech locally."""
@@ -2004,7 +2153,9 @@ class BilibiliParserPlugin(Star):
             try:
                 await asyncio.wait_for(self._download_semaphore.acquire(), timeout=0.5)
                 return True
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
+                # Python 3.10 及以前 asyncio.TimeoutError 不是内置 TimeoutError
+                # 的子类，只捕获内置类型会让排队超时直接冒出去、任务卡在 queued。
                 continue
         return False
 
@@ -2105,8 +2256,15 @@ class BilibiliParserPlugin(Star):
                 pass
             self._live_monitor_task = None
         self._pending_downloads.clear()
+        self._download_jobs.clear()
+        self._cache.clear()
         self._audio_cache.clear()
         self._content_cache.clear()
+        self._summary_cache.clear()
+        self._live_status_cache.clear()
+        # 渲染出来的长图存在磁盘上，只清字典会把文件留在 AstrBot 的渲染目录里。
+        for _, image_path in self._card_cache.values():
+            self._delete_card_file(image_path)
         self._card_cache.clear()
         for cancel_event in self._transcription_cancels:
             cancel_event.set()

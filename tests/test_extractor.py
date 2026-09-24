@@ -147,11 +147,20 @@ class ExtractorTests(unittest.TestCase):
         )
         self.assertEqual((result.kind, result.value), ("ss", "42202"))
 
-    def test_ignores_space_homepage_without_content_id(self):
-        # 空间主页指向的不是具体内容，不能抓主页推荐位里的随机视频。
-        self.assertIsNone(
-            extract_video_reference("https://space.bilibili.com/13157457")
-        )
+    def test_extracts_user_from_space_homepage(self):
+        # 空间主页解析成 UP 主名片，不再被静默忽略。
+        result = extract_video_reference("https://space.bilibili.com/13157457")
+        self.assertEqual((result.kind, result.value), ("user", "13157457"))
+
+    def test_ignores_space_subpage_without_content_id(self):
+        # 空间主页的子页（合集、相册等）没有稳定含义，仍然忽略；
+        # 带 BV 的 space 链接由更早的分支命中，不受这里影响。
+        for url in (
+            "https://space.bilibili.com/13157457/channel/collectiondetail?sid=1",
+            "https://space.bilibili.com/",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(extract_video_reference(url))
 
     def test_extracts_video_from_space_url_with_bvid(self):
         result = extract_video_reference(

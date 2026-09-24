@@ -171,6 +171,39 @@
     .reply-name { color: #4e5358; font-size: 14px; font-weight: 800; }
     .reply-to { margin-left: 7px; color: #6d757a; font-size: 13px; font-weight: 500; }
     .reply-copy { margin-top: 3px; font-size: 16px; line-height: 1.65; }
+    .part-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      border: 1px solid #d8dadd;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .part-item {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      padding: 10px 14px;
+      font-size: 16px;
+    }
+    .part-item + .part-item { border-top: 1px solid #eceef0; }
+    .part-item:nth-child(odd) { background: #f6f7f8; }
+    .part-index {
+      flex: 0 0 auto;
+      min-width: 34px;
+      color: #fb7299;
+      font-weight: 800;
+    }
+    .part-title {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .part-duration {
+      flex: 0 0 auto;
+      color: #6d757a;
+      font-size: 14px;
+    }
     .stats {
       display: grid;
       grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -262,6 +295,23 @@
         <div class="section-title">视频简介</div>
         <div class="copy">{{ description | safe }}</div>
       </section>
+
+      {% if parts %}
+      <section class="section">
+        <div class="section-title">分 P 列表
+          <span class="source">共 {{ page_count }} P{% if parts_more != "0" %}，显示前 {{ parts | length }} P{% endif %}</span>
+        </div>
+        <ol class="part-list">
+          {% for part in parts %}
+          <li class="part-item">
+            <span class="part-index">P{{ part.index }}</span>
+            <span class="part-title">{{ part.title | safe }}</span>
+            <span class="part-duration">{{ part.duration }}</span>
+          </li>
+          {% endfor %}
+        </ol>
+      </section>
+      {% endif %}
 
       {% if featured_comments %}
       <section class="section">

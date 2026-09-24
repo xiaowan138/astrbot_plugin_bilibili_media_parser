@@ -129,3 +129,22 @@ def parse_live_monitor_command(
         if room_id is not None:
             return "unsubscribe", room_id
     return "help", None
+
+
+def parse_summary_command(message: str, keyword: str) -> str | None:
+    """Parse "视频总结 BV1xx411c7RD" style commands.
+
+    Returns None when the message is not this command, and "" when the user
+    sent the bare keyword (caller should show a usage hint).
+    """
+    if not keyword:
+        return None
+    value = str(message or "").strip()
+    if not value:
+        return None
+    if value == keyword:
+        return ""
+    match = re.fullmatch(rf"{re.escape(keyword)}\s+(.+)", value, re.S)
+    if not match:
+        return None
+    return match.group(1).strip()

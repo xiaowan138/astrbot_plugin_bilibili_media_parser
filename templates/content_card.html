@@ -223,8 +223,8 @@
 
       {% if cover_src %}
       <img class="cover" src="{{ cover_src | safe }}" alt="" decoding="sync">
-      {% else %}
-      <div class="cover cover-fallback">封面暂时无法加载</div>
+      {% elif cover_fallback %}
+      <div class="cover cover-fallback">{{ cover_fallback | safe }}</div>
       {% endif %}
 
       {% if gallery_srcs %}

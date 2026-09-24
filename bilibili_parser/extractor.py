@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlparse
 
 
 ReferenceKind = Literal[
-    "bvid", "aid", "auid", "article", "live", "dynamic", "ep", "ss", "url"
+    "bvid", "aid", "auid", "article", "live", "dynamic", "ep", "ss", "user", "url"
 ]
 
 _BVID_RE = re.compile(r"(?<![0-9A-Za-z])BV[0-9A-Za-z]{10}(?![0-9A-Za-z])", re.I)
@@ -59,6 +59,8 @@ class VideoReference:
             return f"ep{self.value}"
         if self.kind == "ss":
             return f"ss{self.value}"
+        if self.kind == "user":
+            return f"uid{self.value}"
         return self.value
 
 
@@ -219,13 +221,17 @@ def _reference_from_text(value: str, source: str) -> VideoReference | None:
     if bangumi_ss_match:
         return VideoReference("ss", bangumi_ss_match.group(1), source)
 
-    # UP 主空间页指向的不是具体内容：继续解析只会抓到主页推荐位里的
-    # 随机视频。带上 BV 的 space 链接在更早的正则分支已经命中，不会走到这里。
+    # 带 BV 的 space 链接在更早的正则分支已经命中，这里只会收到空间主页。
     try:
         host = (urlparse(url).hostname or "").lower()
+        path = urlparse(url).path
     except ValueError:
         return None
     if host == "space.bilibili.com":
+        space_uid_match = re.fullmatch(r"/(\d{1,20})/?", path)
+        if space_uid_match:
+            return VideoReference("user", space_uid_match.group(1), source)
+        # 空间主页的其他子页（投稿列表、专辑、直播页）没有稳定含义，忽略。
         return None
 
     return VideoReference("url", url, source)
